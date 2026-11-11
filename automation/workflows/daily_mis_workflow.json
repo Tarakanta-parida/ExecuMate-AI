@@ -1,0 +1,139 @@
+{
+  "name": "ExecuMate AI - Daily MIS Executive Email & Escalation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "node-cron-trigger",
+      "name": "Daily 8 AM Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/reports/generate",
+        "method": "POST",
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "report_name",
+              "value": "Executive_Daily_MIS_Consolidated.xlsx"
+            },
+            {
+              "name": "category",
+              "value": "Executive Daily MIS"
+            }
+          ]
+        }
+      },
+      "id": "node-fetch-report",
+      "name": "Trigger FastAPI MIS Generation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/tasks",
+        "method": "GET"
+      },
+      "id": "node-check-overdue",
+      "name": "Scan Overdue Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.is_overdue }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "node-filter-overdue",
+      "name": "Filter Overdue Tasks",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:8000/api/automation/trigger",
+        "method": "POST",
+        "bodyParametersUi": {
+          "parameter": [
+            {
+              "name": "workflow_id",
+              "value": "wf-1"
+            }
+          ]
+        }
+      },
+      "id": "node-record-log",
+      "name": "Log Execution to PostgreSQL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1140, 300]
+    }
+  ],
+  "connections": {
+    "Daily 8 AM Trigger": {
+      "main": [
+        [
+          {
+            "node": "Trigger FastAPI MIS Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger FastAPI MIS Generation": {
+      "main": [
+        [
+          {
+            "node": "Scan Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Filter Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Log Execution to PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
+

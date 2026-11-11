@@ -1,0 +1,17 @@
+Transaction_ID,Date,Region,Product_Category,Units_Sold,Revenue_USD,Cost_USD,Gross_Margin_Pct,Client_Tier,Status
+1001,2026-10-01,North America,Cloud SaaS,145,72500,21750,70.0,Enterprise,Closed-Won
+1002,2026-10-02,EMEA,Hardware,82,41000,24600,40.0,Mid-Market,Closed-Won
+1003,2026-10-03,APAC,Professional Services,34,17000,9500,44.1,Enterprise,In-Review
+1004,2026-10-04,North America,Cloud SaaS,210,105000,31500,70.0,Enterprise,Closed-Won
+1005,2026-10-05,LATAM,Hardware,,18500,,38.0,SMB,Closed-Won
+1006,2026-10-06,EMEA,Cloud SaaS,120,60000,18000,70.0,Enterprise,Closed-Won
+1007,2026-10-06,EMEA,Cloud SaaS,120,60000,18000,70.0,Enterprise,Closed-Won
+1008,2026-10-08,APAC,Hardware,64,32000,19800,38.1,Mid-Market,Pending
+1009,2026-10-09,North America,Professional Services,50,25000,13000,48.0,Enterprise,Closed-Won
+1010,2026-10-10,LATAM,Cloud SaaS,75,37500,11250,70.0,SMB,Closed-Won
+1011,2026-10-11,EMEA,Hardware,48,24000,14400,40.0,Mid-Market,In-Review
+1012,2026-10-12,North America,Cloud SaaS,190,95000,28500,70.0,Enterprise,Closed-Won
+1013,2026-10-13,APAC,Professional Services,,14200,8100,,SMB,Closed-Won
+1014,2026-10-14,LATAM,Professional Services,28,14000,7700,45.0,SMB,Closed-Won
+1015,2026-10-15,North America,Hardware,110,55000,33000,40.0,Enterprise,Closed-Won
+
