@@ -3,13 +3,14 @@ import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from ..database import get_db
 from ..models import Report, Dataset
 from ..schemas import ReportResponse
 from ..config import settings
 from ..services.report_generator import generate_excel_mis_report
+from ..services.data_cleaning import _load_dataframe
 
 router = APIRouter(prefix="/api/reports", tags=["MIS Reports"])
 
@@ -17,53 +18,44 @@ class GenerateReportRequest(BaseModel):
     report_name: Optional[str] = "Executive_MIS_Report.xlsx"
     dataset_id: Optional[str] = None
     category: Optional[str] = "Executive MIS"
+    dataset_name: Optional[str] = None
+    rows: Optional[List[Dict[str, Any]]] = None
+    imputation_details: Optional[List[Dict[str, Any]]] = None
 
 @router.get("", response_model=List[ReportResponse])
 def list_reports(db: Session = Depends(get_db)):
-    reports = db.query(Report).order_by(Report.generated_at.desc()).all()
-    seed_marker = os.path.join(settings.REPORTS_DIR, ".initial_report_seeded")
-    if not reports and not os.path.exists(seed_marker):
-        # Generate initial demo report once on first boot
-        sample_path = os.path.join(settings.REPORTS_DIR, "Q4_Regional_Sales_Performance_MIS.xlsx")
-        df_sample = pd.DataFrame([
-            {"Region": "North America", "Revenue": 327500, "Units": 545, "Margin_Pct": 68.2},
-            {"Region": "EMEA", "Revenue": 125000, "Units": 250, "Margin_Pct": 56.0},
-            {"Region": "APAC", "Revenue": 63200, "Units": 98, "Margin_Pct": 41.2},
-            {"Region": "LATAM", "Revenue": 70000, "Units": 103, "Margin_Pct": 51.0}
-        ])
-        generate_excel_mis_report(df_sample, sample_path, "Q4 Regional Sales Performance MIS")
-
-        rep = Report(
-            report_name="Q4_Regional_Sales_Performance_MIS.xlsx",
-            category="Financial Analytics",
-            file_path=sample_path,
-            file_size="1.4 MB"
-        )
-        db.add(rep)
-        db.commit()
-        os.makedirs(settings.REPORTS_DIR, exist_ok=True)
-        with open(seed_marker, "w") as f:
-            f.write("seeded\n")
-        reports = db.query(Report).order_by(Report.generated_at.desc()).all()
-    return reports
+    return db.query(Report).order_by(Report.generated_at.desc()).all()
 
 @router.post("/generate", response_model=ReportResponse)
 def generate_report(req: GenerateReportRequest, db: Session = Depends(get_db)):
-    output_filename = req.report_name or "Executive_MIS_Report.xlsx"
+    output_filename = os.path.basename(req.report_name or "Executive_MIS_Report.xlsx")
     if not output_filename.endswith(".xlsx"):
         output_filename += ".xlsx"
 
+    df = None
+    source_name = req.dataset_name
+
+    if req.rows and len(req.rows) > 0:
+        df = pd.DataFrame(req.rows)
+    elif req.dataset_id:
+        ds = db.query(Dataset).filter(Dataset.id == req.dataset_id).first()
+        if ds and os.path.exists(ds.storage_path):
+            df = _load_dataframe(ds.storage_path)
+            source_name = source_name or ds.filename
+
+    if df is None or df.empty:
+        raise HTTPException(status_code=400, detail="Please upload a CSV or Excel dataset first before generating a report.")
+
+    os.makedirs(settings.REPORTS_DIR, exist_ok=True)
     file_path = os.path.join(settings.REPORTS_DIR, output_filename)
 
-    # Use dataset or generate from synthetic enterprise ledger
-    df = pd.DataFrame([
-        {"Region": "North America", "Category": "Cloud SaaS", "Revenue": 272500, "Units": 545, "Margin": 70.0},
-        {"Region": "EMEA", "Category": "Hardware", "Revenue": 125000, "Units": 250, "Margin": 40.0},
-        {"Region": "APAC", "Category": "Professional Services", "Revenue": 63200, "Units": 98, "Margin": 44.1},
-        {"Region": "LATAM", "Category": "Cloud SaaS", "Revenue": 70000, "Units": 103, "Margin": 65.0}
-    ])
-
-    generate_excel_mis_report(df, file_path, output_filename.replace(".xlsx", ""))
+    generate_excel_mis_report(
+        df,
+        file_path,
+        report_title=output_filename.replace(".xlsx", ""),
+        dataset_name=source_name,
+        imputation_details=req.imputation_details
+    )
 
     rep = Report(
         report_name=output_filename,

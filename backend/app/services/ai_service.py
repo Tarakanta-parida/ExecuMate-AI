@@ -2,24 +2,26 @@ from typing import List, Dict
 
 def generate_document_summary(pages_data: List[Dict[str, any]]) -> Dict[str, any]:
     total_pages = len(pages_data)
-    combined_text = " ".join([p["content"][:300] for p in pages_data[:5]])
+    combined_text = " ".join([" ".join(p["content"].split()) for p in pages_data[:5]]).strip()
+    excerpt = (combined_text[:340] + "...") if len(combined_text) > 340 else combined_text
 
     summary = (
-        f"This executive document spans {total_pages} pages and focuses on strategic milestones, "
-        "operational governance, and performance metrics. Leadership prioritizes streamlined workflows, "
-        "risk mitigation, and capital allocation across high-return initiatives."
+        f"Extracted {total_pages} page(s) from the uploaded PDF. Overview: {excerpt}"
+        if excerpt
+        else f"Uploaded PDF spans {total_pages} page(s) and is indexed for document Q&A."
     )
 
-    key_points = [
-        "Comprehensive operational review across core business departments.",
-        "Clear alignment with fiscal year targets and regulatory frameworks.",
-        "Specific directives identified for immediate task assignment and monitoring."
-    ]
+    key_points = []
+    for p in pages_data[:3]:
+        snippet = " ".join(p["content"].split())[:140]
+        if snippet:
+            key_points.append(f"Page {p['page_number']}: {snippet}...")
+    if not key_points:
+        key_points = ["PDF indexed and ready for document questions."]
 
     recommendations = [
-        "Establish automated weekly KPI tracking across impacted teams.",
-        "Review critical deadlines highlighted in Section 3.",
-        "Incorporate cited risk thresholds into upcoming leadership agenda."
+        "Ask specific questions in the chat panel to retrieve exact page citations.",
+        "Cross-reference numeric metrics from your uploaded spreadsheet in MIS Analytics."
     ]
 
     return {

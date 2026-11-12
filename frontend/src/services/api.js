@@ -67,6 +67,14 @@ export const api = {
 
   // Documents
   getDocuments: () => request('/documents'),
+  uploadDocument: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request('/documents/upload', {
+      method: 'POST',
+      body: formData,
+    });
+  },
   deleteDocument: (docId) =>
     request(`/documents/${docId}`, {
       method: 'DELETE',
@@ -102,11 +110,16 @@ export const api = {
     request(`/reports/${reportId}`, {
       method: 'DELETE',
     }),
-  generateReport: (reportName, category = 'Executive MIS') =>
+  generateReport: (payload) =>
     request('/reports/generate', {
       method: 'POST',
-      body: JSON.stringify({ report_name: reportName, category }),
+      body: JSON.stringify(
+        typeof payload === 'string'
+          ? { report_name: payload, category: 'Executive MIS' }
+          : payload
+      ),
     }),
+  getReportDownloadUrl: (reportId) => `${API_BASE_URL}/reports/${reportId}/download`,
 
   // Automation
   getWorkflows: () => request('/automation/workflows'),

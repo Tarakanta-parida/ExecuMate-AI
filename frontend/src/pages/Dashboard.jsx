@@ -12,7 +12,9 @@ import {
   MessageSquare,
   Download,
   PlusCircle,
-  ArrowUpRight
+  ArrowUpRight,
+  FileText,
+  Upload
 } from 'lucide-react';
 import {
   AreaChart,
@@ -32,7 +34,20 @@ import { mockDashboardKPIs, mockWeeklyPerformance } from '../mockData';
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { currentUser, tasks, updateTaskStatus, reports, projects, showToast } = useApp();
+  const {
+    currentUser,
+    tasks,
+    updateTaskStatus,
+    reports,
+    projects,
+    dataset,
+    datasetName,
+    datasetAnalysis,
+    documents,
+    setSelectedDocId,
+    generateReportFromData,
+    downloadReport
+  } = useApp();
 
   const overdueTasks = tasks.filter(t => t.isOverdue && t.status !== 'completed');
   const highPriorityTasks = tasks.filter(t => t.priority === 'high' && t.status !== 'completed');
@@ -74,20 +89,20 @@ export default function Dashboard() {
       {/* KPI Row (Module 01) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KPICard
-          title="Active Projects"
-          value={projects.length}
-          change={mockDashboardKPIs.totalProjectsChange}
-          changeType="positive"
-          icon={FolderKanban}
-          subtitle="portfolio active"
+          title="Uploaded Dataset"
+          value={dataset.length > 0 ? `${dataset.length} rows` : 'None'}
+          change={dataset.length > 0 ? `${datasetAnalysis.columns.length} columns` : 'Upload CSV / Excel'}
+          changeType={dataset.length > 0 ? "positive" : "neutral"}
+          icon={FileSpreadsheet}
+          subtitle={datasetName || "No file uploaded"}
         />
         <KPICard
-          title="Pending Tasks"
-          value={tasks.filter(t => t.status === 'pending').length}
-          change="14 in progress"
-          changeType="neutral"
-          icon={Clock}
-          subtitle="team assignments"
+          title="Uploaded PDFs"
+          value={documents.length}
+          change={documents.length > 0 ? "Indexed for AI Q&A" : "Upload PDF"}
+          changeType={documents.length > 0 ? "positive" : "neutral"}
+          icon={FileText}
+          subtitle="Research documents"
         />
         <KPICard
           title="Overdue Tasks"
@@ -101,10 +116,10 @@ export default function Dashboard() {
         <KPICard
           title="Generated MIS Reports"
           value={reports.length}
-          change="+12 this week"
-          changeType="positive"
-          icon={FileSpreadsheet}
-          subtitle="Excel & PDF assets"
+          change={reports.length > 0 ? "Ready to download" : "Generate from data"}
+          changeType={reports.length > 0 ? "positive" : "neutral"}
+          icon={FolderKanban}
+          subtitle="From uploaded files"
         />
       </div>
 
@@ -193,6 +208,113 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Uploaded Files Overview (Shows CSV/Excel & PDFs across Dashboard) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-base font-bold text-[#1E293B]">Uploaded Dataset (CSV / Excel)</h2>
+                <p className="text-xs text-[#64748B]">Active spreadsheet used for analytics and MIS report generation</p>
+              </div>
+              <button
+                onClick={() => navigate('/analytics')}
+                className="text-xs text-[#2563EB] hover:underline font-semibold"
+              >
+                Open Analytics
+              </button>
+            </div>
+
+            {dataset.length === 0 ? (
+              <div className="py-6 text-center border border-dashed border-[#CBD5E1] rounded-lg bg-[#F8FAFC]">
+                <Upload className="w-6 h-6 text-[#64748B] mx-auto mb-1.5" />
+                <p className="text-xs font-medium text-[#1E293B]">No CSV or Excel dataset uploaded yet</p>
+                <button
+                  onClick={() => navigate('/analytics')}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#2563EB] hover:underline"
+                >
+                  Upload Dataset <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-50 text-[#16A34A] flex items-center justify-center shrink-0">
+                    <FileSpreadsheet className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-[#1E293B] truncate" title={datasetName}>{datasetName}</div>
+                    <div className="text-[11px] text-[#64748B]">
+                      {dataset.length} rows • {datasetAnalysis.columns.length} columns • {datasetAnalysis.numericColumns.length} numeric
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => generateReportFromData()}
+                  className="shrink-0 px-3 py-1.5 rounded-lg bg-[#2563EB] hover:bg-blue-700 text-white text-xs font-semibold transition-colors"
+                >
+                  Create Report
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-6 shadow-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-base font-bold text-[#1E293B]">Uploaded PDF Documents</h2>
+                <p className="text-xs text-[#64748B]">PDFs indexed in your AI Research Assistant</p>
+              </div>
+              <button
+                onClick={() => navigate('/research')}
+                className="text-xs text-[#2563EB] hover:underline font-semibold"
+              >
+                Open Research
+              </button>
+            </div>
+
+            {documents.length === 0 ? (
+              <div className="py-6 text-center border border-dashed border-[#CBD5E1] rounded-lg bg-[#F8FAFC]">
+                <FileText className="w-6 h-6 text-[#64748B] mx-auto mb-1.5" />
+                <p className="text-xs font-medium text-[#1E293B]">No PDF documents uploaded yet</p>
+                <button
+                  onClick={() => navigate('/research')}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-[#2563EB] hover:underline"
+                >
+                  Upload PDF <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-[#E2E8F0]">
+                {documents.slice(0, 3).map((doc) => (
+                  <div
+                    key={doc.id}
+                    onClick={() => {
+                      setSelectedDocId(doc.id);
+                      navigate('/research');
+                    }}
+                    className="py-2.5 flex items-center justify-between gap-3 text-xs cursor-pointer hover:bg-[#F8FAFC] px-2 rounded-lg transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-lg bg-red-50 text-red-600 flex items-center justify-center font-bold text-[10px] shrink-0">
+                        PDF
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-[#1E293B] truncate">{doc.title}</div>
+                        <div className="text-[11px] text-[#64748B]">{doc.pages} pages • {doc.size}</div>
+                      </div>
+                    </div>
+                    <ArrowUpRight className="w-4 h-4 text-[#64748B] shrink-0" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Bottom Section: Urgent Tasks & Recent Reports */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Urgent & Overdue Assignments */}
@@ -272,29 +394,39 @@ export default function Dashboard() {
           </div>
 
           <div className="divide-y divide-[#E2E8F0]">
-            {reports.slice(0, 4).map((report) => (
-              <div key={report.id} className="py-3 flex items-center justify-between gap-3 text-xs">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-emerald-50 text-[#16A34A] flex items-center justify-center font-bold text-xs shrink-0">
-                    XLS
-                  </div>
-                  <div>
-                    <div className="font-semibold text-[#1E293B] truncate max-w-[220px]">{report.name}</div>
-                    <div className="text-[11px] text-[#64748B]">
-                      {report.category} • {report.size} • {report.generatedAt}
+            {reports.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[#64748B]">
+                No MIS reports generated yet. Upload a dataset and click <strong>Create Report</strong>.
+              </div>
+            ) : (
+              reports.slice(0, 4).map((report) => (
+                <div key={report.id} className="py-3 flex items-center justify-between gap-3 text-xs">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-[10px] shrink-0 ${
+                        report.format === 'PDF' ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-[#16A34A]'
+                      }`}
+                    >
+                      {report.format === 'PDF' ? 'PDF' : 'XLS'}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-[#1E293B] truncate max-w-[220px]">{report.name}</div>
+                      <div className="text-[11px] text-[#64748B]">
+                        {report.category} • {report.size} • {report.generatedAt}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <button
-                  onClick={() => showToast(`Downloading ${report.name}...`)}
-                  className="p-1.5 rounded-lg text-[#64748B] hover:text-[#2563EB] hover:bg-blue-50 transition-colors"
-                  title="Download File"
-                >
-                  <Download className="w-4 h-4" />
-                </button>
-              </div>
-            ))}
+                  <button
+                    onClick={() => downloadReport(report)}
+                    className="p-1.5 rounded-lg text-[#64748B] hover:text-[#2563EB] hover:bg-blue-50 transition-colors shrink-0"
+                    title="Download File"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>

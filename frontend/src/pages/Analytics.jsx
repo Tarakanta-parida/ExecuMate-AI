@@ -13,7 +13,8 @@ import {
   TrendingUp,
   Percent,
   Layers,
-  ArrowUpDown
+  ArrowUpDown,
+  Trash2
 } from 'lucide-react';
 import {
   BarChart,
@@ -42,7 +43,7 @@ export default function Analytics() {
     cleanData,
     resetData,
     loadUploadedDataset,
-    restoreSampleDataset,
+    clearDataset,
     isDatasetUploading,
     generateReportFromData
   } = useApp();
@@ -259,74 +260,94 @@ export default function Analytics() {
             <input type="file" accept=".csv, .xlsx, .xls" className="hidden" disabled={isDatasetUploading} onChange={handleFileUpload} />
           </label>
 
-          {datasetName !== 'regional_sales_q4_uncleaned.csv' && (
-            <button
-              onClick={restoreSampleDataset}
-              className="px-3 py-2 text-xs font-semibold text-[#64748B] hover:text-[#1E293B] bg-white border border-[#CBD5E1] rounded-lg transition-colors"
-              title="Switch back to built-in sample dataset"
-            >
-              Sample Data
-            </button>
-          )}
+          {dataset.length > 0 && (
+            <>
+              <select
+                value={imputationStrategy}
+                onChange={(e) => {
+                  const nextStrategy = e.target.value;
+                  setImputationStrategy(nextStrategy);
+                  if (isDataCleaned) {
+                    cleanData(nextStrategy);
+                  }
+                }}
+                aria-label="Numerical null imputation method"
+                title="Choose how numerical NULL values are replaced"
+                className="px-3 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold shadow-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="auto">Nulls: Auto (By Dataset)</option>
+                <option value="mean">Nulls: Mean</option>
+                <option value="median">Nulls: Median</option>
+                <option value="max">Nulls: Max</option>
+              </select>
 
-          <select
-            value={imputationStrategy}
-            onChange={(e) => {
-              const nextStrategy = e.target.value;
-              setImputationStrategy(nextStrategy);
-              if (isDataCleaned) {
-                cleanData(nextStrategy);
-              }
-            }}
-            aria-label="Numerical null imputation method"
-            title="Choose how numerical NULL values are replaced"
-            className="px-3 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold shadow-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-          >
-            <option value="auto">Nulls: Auto (By Dataset)</option>
-            <option value="mean">Nulls: Mean</option>
-            <option value="median">Nulls: Median</option>
-            <option value="max">Nulls: Max</option>
-          </select>
+              <button
+                onClick={() => cleanData()}
+                disabled={isDataCleaned}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white shadow-sm transition-all ${
+                  isDataCleaned
+                    ? 'bg-emerald-600 opacity-90 cursor-default'
+                    : 'bg-[#2563EB] hover:bg-blue-700'
+                }`}
+              >
+                {isDataCleaned ? (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" /> Data Cleaned
+                  </>
+                ) : (
+                  <>
+                    <Filter className="w-4 h-4" /> Clean my data
+                  </>
+                )}
+              </button>
 
-          <button
-            onClick={() => cleanData()}
-            disabled={isDataCleaned}
-            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white shadow-sm transition-all ${
-              isDataCleaned
-                ? 'bg-emerald-600 opacity-90 cursor-default'
-                : 'bg-[#2563EB] hover:bg-blue-700'
-            }`}
-          >
-            {isDataCleaned ? (
-              <>
-                <CheckCircle2 className="w-4 h-4" /> Data Cleaned
-              </>
-            ) : (
-              <>
-                <Filter className="w-4 h-4" /> Clean my data
-              </>
-            )}
-          </button>
+              <button
+                onClick={() => generateReportFromData()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                <span>Create report</span>
+              </button>
 
-          <button
-            onClick={() => generateReportFromData(`Regional_MIS_Report_${Date.now().toString().slice(-4)}.xlsx`)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
-          >
-            <Download className="w-4 h-4" />
-            <span>Create report</span>
-          </button>
+              {isDataCleaned && (
+                <button
+                  onClick={resetData}
+                  className="p-2 text-[#64748B] hover:text-[#1E293B] hover:bg-white rounded-lg border border-[#E2E8F0] transition-colors"
+                  title="Reset to raw uploaded data"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+              )}
 
-          {isDataCleaned && (
-            <button
-              onClick={resetData}
-              className="p-2 text-[#64748B] hover:text-[#1E293B] hover:bg-white rounded-lg border border-[#E2E8F0] transition-colors"
-              title="Reset to raw data"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
+              <button
+                onClick={clearDataset}
+                className="p-2 text-[#64748B] hover:text-red-600 hover:bg-red-50 rounded-lg border border-[#E2E8F0] transition-colors"
+                title="Remove uploaded dataset"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {dataset.length === 0 ? (
+        <div className="bg-white border border-dashed border-[#CBD5E1] rounded-xl p-12 text-center shadow-sm">
+          <div className="w-12 h-12 rounded-full bg-blue-50 text-[#2563EB] flex items-center justify-center mx-auto mb-3">
+            <FileSpreadsheet className="w-6 h-6" />
+          </div>
+          <h3 className="text-sm font-bold text-[#1E293B]">No Dataset Uploaded Yet</h3>
+          <p className="text-xs text-[#64748B] mt-1 max-w-md mx-auto">
+            Upload any CSV or Excel (`.xlsx` / `.xls`) file from your computer to clean numerical nulls (using mean, median, or max), visualize KPIs, and generate a tailored MIS report.
+          </p>
+          <label className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-sm transition-colors">
+            <Upload className="w-4 h-4" />
+            <span>Upload CSV / Excel Dataset</span>
+            <input type="file" accept=".csv, .xlsx, .xls" className="hidden" disabled={isDatasetUploading} onChange={handleFileUpload} />
+          </label>
+        </div>
+      ) : (
+        <>
 
       {/* Dataset Health & Audit Overview */}
       <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm">
@@ -720,6 +741,8 @@ export default function Analytics() {
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

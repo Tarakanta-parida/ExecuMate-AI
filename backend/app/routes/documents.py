@@ -18,10 +18,12 @@ def list_documents(db: Session = Depends(get_db)):
 
 @router.post("/upload", response_model=DocumentResponse)
 async def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not file.filename.endswith(".pdf"):
+    safe_name = os.path.basename(file.filename or "")
+    if not safe_name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
-    file_path = os.path.join(settings.UPLOAD_DIR, file.filename)
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(settings.UPLOAD_DIR, safe_name)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
@@ -29,12 +31,13 @@ async def upload_pdf(file: UploadFile = File(...), db: Session = Depends(get_db)
     chunks_data = extract_text_from_pdf(file_path)
     summary_data = generate_document_summary(chunks_data)
 
-    file_size_mb = f"{os.path.getsize(file_path) / (1024 * 1024):.1f} MB"
+    size_bytes = os.path.getsize(file_path)
+    file_size_str = f"{size_bytes / (1024 * 1024):.1f} MB" if size_bytes >= 1024 * 1024 else f"{max(1, round(size_bytes / 1024))} KB"
 
     doc = Document(
-        filename=file.filename,
+        filename=safe_name,
         storage_path=file_path,
-        file_size=file_size_mb,
+        file_size=file_size_str,
         page_count=len(chunks_data),
         summary=summary_data["summary"],
         status="ready"

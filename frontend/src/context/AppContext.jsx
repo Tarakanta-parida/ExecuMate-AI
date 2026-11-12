@@ -6,12 +6,8 @@ import {
   mockProjectStatusBreakdown,
   mockProjects,
   mockTasks,
-  mockDocuments,
-  mockChatConversations,
-  initialSampleDataset,
   mockAutomationWorkflows,
-  mockAutomationLogs,
-  mockGeneratedReports
+  mockAutomationLogs
 } from '../mockData';
 import { api } from '../services/api';
 import {
@@ -23,10 +19,16 @@ import {
 const AppContext = createContext();
 
 const STORAGE_KEYS = {
-  reports: 'execumate_reports_v1',
-  deletedReportIds: 'execumate_deleted_report_ids_v1',
-  documents: 'execumate_documents_v1',
-  deletedDocIds: 'execumate_deleted_doc_ids_v1'
+  reports: 'execumate_reports_v2',
+  deletedReportIds: 'execumate_deleted_report_ids_v2',
+  documents: 'execumate_documents_v2',
+  deletedDocIds: 'execumate_deleted_doc_ids_v2',
+  dataset: 'execumate_dataset_v2',
+  rawDataset: 'execumate_raw_dataset_v2',
+  datasetName: 'execumate_dataset_name_v2',
+  datasetId: 'execumate_dataset_id_v2',
+  cleaningStats: 'execumate_cleaning_stats_v2',
+  isDataCleaned: 'execumate_is_data_cleaned_v2'
 };
 
 function readStorage(key, fallback) {
@@ -181,15 +183,18 @@ export function AppProvider({ children }) {
               name: r.report_name,
               category: r.category,
               format: r.report_name?.toLowerCase().endsWith('.pdf') ? "PDF" : "Excel",
-              size: r.file_size || "1.2 MB",
-              generatedAt: r.generated_at ? r.generated_at.split('T')[0] : "2026-11-10",
+              size: r.file_size || "12.0 KB",
+              generatedAt: r.generated_at ? r.generated_at.split('T')[0] : new Date().toISOString().slice(0, 10),
               generatedBy: "ExecuMate Engine",
-              kpisIncluded: ["Cleaned Ledger Data", "Regional Margin", "Executive Summary"],
+              kpisIncluded: ["Generated from Uploaded Dataset"],
               downloadCount: 1
             }));
           setReports(prev => {
             const merged = [
-              ...formattedReports,
+              ...formattedReports.map(fr => {
+                const existing = prev.find(pr => pr.id === fr.id);
+                return existing ? { ...fr, kpisIncluded: existing.kpisIncluded, sourceDataset: existing.sourceDataset, rowsSnapshot: existing.rowsSnapshot } : fr;
+              }),
               ...prev.filter(pr => !deletedIds.has(pr.id) && !formattedReports.some(fr => fr.id === pr.id))
             ];
             writeStorage(STORAGE_KEYS.reports, merged);
@@ -197,7 +202,41 @@ export function AppProvider({ children }) {
           });
         }
       } catch (err) {
-        // Keeps fallback
+        // Keeps localStorage state
+      }
+
+      try {
+        const liveDocs = await api.getDocuments();
+        if (Array.isArray(liveDocs) && liveDocs.length > 0) {
+          const deletedDocIds = new Set(readStorage(STORAGE_KEYS.deletedDocIds, []));
+          const formattedDocs = liveDocs
+            .filter(d => !deletedDocIds.has(d.id))
+            .map(d => ({
+              id: d.id,
+              title: d.filename,
+              size: d.file_size || "1.0 MB",
+              pages: d.page_count || 1,
+              uploadedAt: d.uploaded_at ? d.uploaded_at.split('T')[0] : new Date().toISOString().slice(0, 10),
+              uploadedBy: currentUser.name,
+              status: d.status || "ready",
+              summary: d.summary || "PDF uploaded and indexed for document Q&A.",
+              keyPoints: ["Document extracted via PyMuPDF.", "Ready for grounded Q&A."],
+              recommendations: ["Ask questions about this PDF in the chat panel."]
+            }));
+          setDocuments(prev => {
+            const merged = [
+              ...formattedDocs.map(fd => {
+                const existing = prev.find(pd => pd.id === fd.id);
+                return existing ? { ...fd, keyPoints: existing.keyPoints, recommendations: existing.recommendations } : fd;
+              }),
+              ...prev.filter(pd => !deletedDocIds.has(pd.id) && !formattedDocs.some(fd => fd.id === pd.id))
+            ];
+            writeStorage(STORAGE_KEYS.documents, merged);
+            return merged;
+          });
+        }
+      } catch (err) {
+        // Keeps localStorage state
       }
 
       try {
@@ -286,36 +325,41 @@ export function AppProvider({ children }) {
     }
   };
 
-  // Data Analytics & MIS Module
-  const initialCleanResult = useMemo(() => cleanDatasetRows(initialSampleDataset, 'auto'), []);
-  const [rawDataset, setRawDataset] = useState(initialSampleDataset);
-  const [dataset, setDataset] = useState(initialCleanResult.cleanedRows);
-  const [datasetName, setDatasetName] = useState('regional_sales_q4_uncleaned.csv');
+  // Data Analytics & MIS Module (starts empty; persisted when user uploads a file)
+  const [rawDataset, setRawDataset] = useState(() => readStorage(STORAGE_KEYS.rawDataset, []));
+  const [dataset, setDataset] = useState(() => readStorage(STORAGE_KEYS.dataset, []));
+  const [datasetName, setDatasetName] = useState(() => readStorage(STORAGE_KEYS.datasetName, ''));
+  const [activeDatasetId, setActiveDatasetId] = useState(() => readStorage(STORAGE_KEYS.datasetId, null));
   const [imputationStrategy, setImputationStrategy] = useState('auto');
-  const [isDataCleaned, setIsDataCleaned] = useState(true);
+  const [isDataCleaned, setIsDataCleaned] = useState(() => readStorage(STORAGE_KEYS.isDataCleaned, false));
 
   const datasetAnalysis = useMemo(() => analyzeDatasetRows(dataset), [dataset]);
 
-  const [cleaningStats, setCleaningStats] = useState({
-    duplicatesRemoved: initialCleanResult.duplicatesRemoved,
-    missingValuesImputed: initialCleanResult.missingValuesImputed,
-    initialRows: initialCleanResult.initialRows,
-    currentRows: initialCleanResult.currentRows,
-    cleanQualityScore: initialCleanResult.cleanQualityScore,
-    strategy: 'auto',
-    imputationDetails: initialCleanResult.imputationDetails
-  });
+  const [cleaningStats, setCleaningStats] = useState(() =>
+    readStorage(STORAGE_KEYS.cleaningStats, {
+      duplicatesRemoved: 0,
+      missingValuesImputed: 0,
+      initialRows: 0,
+      currentRows: 0,
+      cleanQualityScore: 100,
+      strategy: 'auto',
+      imputationDetails: []
+    })
+  );
 
   const cleanData = (strategyOverride) => {
+    if (!rawDataset || rawDataset.length === 0) {
+      showToast('Please upload a CSV or Excel dataset first.', 'warning');
+      return;
+    }
+
     const activeStrategy = typeof strategyOverride === 'string' ? strategyOverride : imputationStrategy;
     if (typeof strategyOverride === 'string') {
       setImputationStrategy(strategyOverride);
     }
 
     const result = cleanDatasetRows(rawDataset, activeStrategy);
-    setDataset(result.cleanedRows);
-    setIsDataCleaned(true);
-    setCleaningStats({
+    const nextStats = {
       duplicatesRemoved: result.duplicatesRemoved,
       missingValuesImputed: result.missingValuesImputed,
       initialRows: result.initialRows,
@@ -323,7 +367,14 @@ export function AppProvider({ children }) {
       cleanQualityScore: result.cleanQualityScore,
       strategy: activeStrategy,
       imputationDetails: result.imputationDetails
-    });
+    };
+
+    setDataset(result.cleanedRows);
+    setIsDataCleaned(true);
+    setCleaningStats(nextStats);
+    writeStorage(STORAGE_KEYS.dataset, result.cleanedRows);
+    writeStorage(STORAGE_KEYS.isDataCleaned, true);
+    writeStorage(STORAGE_KEYS.cleaningStats, nextStats);
 
     const summaryText = result.imputationDetails
       .filter((d) => d.isNumeric)
@@ -338,26 +389,54 @@ export function AppProvider({ children }) {
   };
 
   const resetData = () => {
-    setDataset(rawDataset);
-    setIsDataCleaned(false);
-    setCleaningStats((prev) => ({
-      ...prev,
+    const emptyStats = {
       duplicatesRemoved: 0,
       missingValuesImputed: 0,
+      initialRows: rawDataset.length,
+      currentRows: rawDataset.length,
+      cleanQualityScore: 100,
+      strategy: imputationStrategy,
       imputationDetails: []
-    }));
-    showToast('Dataset reset to original raw file.', 'info');
+    };
+    setDataset(rawDataset);
+    setIsDataCleaned(false);
+    setCleaningStats(emptyStats);
+    writeStorage(STORAGE_KEYS.dataset, rawDataset);
+    writeStorage(STORAGE_KEYS.isDataCleaned, false);
+    writeStorage(STORAGE_KEYS.cleaningStats, emptyStats);
+    showToast('Dataset reset to original uploaded raw file.', 'info');
+  };
+
+  const clearDataset = () => {
+    const emptyStats = {
+      duplicatesRemoved: 0,
+      missingValuesImputed: 0,
+      initialRows: 0,
+      currentRows: 0,
+      cleanQualityScore: 100,
+      strategy: imputationStrategy,
+      imputationDetails: []
+    };
+    setRawDataset([]);
+    setDataset([]);
+    setDatasetName('');
+    setActiveDatasetId(null);
+    setIsDataCleaned(false);
+    setCleaningStats(emptyStats);
+    writeStorage(STORAGE_KEYS.rawDataset, []);
+    writeStorage(STORAGE_KEYS.dataset, []);
+    writeStorage(STORAGE_KEYS.datasetName, '');
+    writeStorage(STORAGE_KEYS.datasetId, null);
+    writeStorage(STORAGE_KEYS.isDataCleaned, false);
+    writeStorage(STORAGE_KEYS.cleaningStats, emptyStats);
+    showToast('Uploaded dataset cleared.', 'info');
   };
 
   const [isDatasetUploading, setIsDatasetUploading] = useState(false);
 
-  const applyDatasetRows = (rows, fileName) => {
+  const applyDatasetRows = (rows, fileName, uploadedDatasetId = null) => {
     const cleaned = cleanDatasetRows(rows, imputationStrategy);
-    setRawDataset(rows);
-    setDataset(cleaned.cleanedRows);
-    setDatasetName(fileName);
-    setIsDataCleaned(true);
-    setCleaningStats({
+    const nextStats = {
       duplicatesRemoved: cleaned.duplicatesRemoved,
       missingValuesImputed: cleaned.missingValuesImputed,
       initialRows: cleaned.initialRows,
@@ -365,7 +444,22 @@ export function AppProvider({ children }) {
       cleanQualityScore: cleaned.cleanQualityScore,
       strategy: imputationStrategy,
       imputationDetails: cleaned.imputationDetails
-    });
+    };
+
+    setRawDataset(rows);
+    setDataset(cleaned.cleanedRows);
+    setDatasetName(fileName);
+    setActiveDatasetId(uploadedDatasetId);
+    setIsDataCleaned(true);
+    setCleaningStats(nextStats);
+
+    writeStorage(STORAGE_KEYS.rawDataset, rows);
+    writeStorage(STORAGE_KEYS.dataset, cleaned.cleanedRows);
+    writeStorage(STORAGE_KEYS.datasetName, fileName);
+    writeStorage(STORAGE_KEYS.datasetId, uploadedDatasetId);
+    writeStorage(STORAGE_KEYS.isDataCleaned, true);
+    writeStorage(STORAGE_KEYS.cleaningStats, nextStats);
+
     const summaryText = cleaned.imputationDetails
       .filter((d) => d.isNumeric)
       .map((d) => `${d.column} -> ${d.value} (${d.method})`)
@@ -387,8 +481,15 @@ export function AppProvider({ children }) {
         const text = await file.text();
         const { rows } = parseCsvText(text);
         if (rows.length > 0) {
-          applyDatasetRows(rows, file.name);
-          api.uploadDataset(file).catch(() => {});
+          applyDatasetRows(rows, file.name, null);
+          api.uploadDataset(file)
+            .then((uploaded) => {
+              if (uploaded?.id) {
+                setActiveDatasetId(uploaded.id);
+                writeStorage(STORAGE_KEYS.datasetId, uploaded.id);
+              }
+            })
+            .catch(() => {});
           return;
         }
         showToast(`"${file.name}" appears empty or has no data rows.`, 'warning');
@@ -399,7 +500,7 @@ export function AppProvider({ children }) {
         showToast(`Uploading & parsing Excel file "${file.name}"...`, 'info');
         const uploaded = await api.uploadDataset(file);
         if (Array.isArray(uploaded?.rows) && uploaded.rows.length > 0) {
-          applyDatasetRows(uploaded.rows, uploaded.filename || file.name);
+          applyDatasetRows(uploaded.rows, uploaded.filename || file.name, uploaded.id || null);
           return;
         }
         showToast(`"${file.name}" appears empty or could not be parsed.`, 'warning');
@@ -414,19 +515,14 @@ export function AppProvider({ children }) {
     }
   };
 
-  const restoreSampleDataset = () => {
-    applyDatasetRows(initialSampleDataset, 'regional_sales_q4_uncleaned.csv');
-  };
-
-  // AI Research Assistant Module
+  // AI Research Assistant Module (starts empty; persisted when user uploads PDFs)
   const [documents, setDocuments] = useState(() => {
-    const saved = readStorage(STORAGE_KEYS.documents, null);
+    const saved = readStorage(STORAGE_KEYS.documents, []);
     const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedDocIds, []));
-    const base = saved !== null ? saved : mockDocuments;
-    return base.filter(d => !deletedIds.has(d.id));
+    return Array.isArray(saved) ? saved.filter(d => !deletedIds.has(d.id)) : [];
   });
   const [selectedDocId, setSelectedDocId] = useState(() => documents[0]?.id || null);
-  const [conversations, setConversations] = useState(mockChatConversations);
+  const [conversations, setConversations] = useState({});
 
   const selectedDocument = useMemo(() => {
     return documents.find(d => d.id === selectedDocId) || documents[0] || null;
@@ -436,8 +532,12 @@ export function AppProvider({ children }) {
     return conversations[selectedDocId] || [];
   }, [conversations, selectedDocId]);
 
-  const askDocumentQuestion = (question) => {
+  const askDocumentQuestion = async (question) => {
     if (!question.trim() || !selectedDocument) return;
+
+    const targetDocId = selectedDocument.id;
+    const targetDocTitle = selectedDocument.title;
+    const targetSummary = selectedDocument.summary;
 
     const userMsg = {
       sender: "user",
@@ -445,27 +545,27 @@ export function AppProvider({ children }) {
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
+    setConversations(prev => ({
+      ...prev,
+      [targetDocId]: [...(prev[targetDocId] || []), userMsg]
+    }));
+
     let aiResponse = "";
     let citations = [];
 
-    const qLower = question.toLowerCase();
-    if (qLower.includes("risk") || qLower.includes("threat") || qLower.includes("challenge")) {
-      aiResponse = `Based on Section 4 of **${selectedDocument.title}**, primary operational risks stem from supply chain concentration in Southeast Asia and rising wage costs (+4.5% projected). The author recommends establishing dual-sourcing vendor contracts and maintaining high-yield defensive reserves.`;
-      citations = [
-        { page: 22, text: "Section 4.1: Operational Risk Matrix and Mitigation Strategies" },
-        { page: 27, text: "Risk Assessment Appendix B" }
-      ];
-    } else if (qLower.includes("cost") || qLower.includes("revenue") || qLower.includes("financial") || qLower.includes("profit")) {
-      aiResponse = `According to the executive financial breakdown in **${selectedDocument.title}**, net revenues exceeded targets with healthy gross margins averaging 58.4%. Operating cash generation rose due to automated invoice collection cycles.`;
-      citations = [
-        { page: 8, text: "Financial Statement: Operating Income and Cash Flow Analysis" },
-        { page: 12, text: "Table 2: Quarterly Margin Comparisons" }
-      ];
-    } else {
-      aiResponse = `According to **${selectedDocument.title}**, key findings indicate positive executive execution against strategic milestones. Specific attention is directed towards accelerating automated digital pipelines, streamlining team collaboration, and monitoring upcoming Q4 regulatory mandates.`;
-      citations = [
-        { page: 4, text: "Executive Summary: Strategic Priorities and Roadmap" }
-      ];
+    try {
+      const apiRes = await api.askDocumentQuestion(targetDocId, question);
+      if (apiRes?.answer) {
+        aiResponse = apiRes.answer;
+        citations = apiRes.citations || [];
+      }
+    } catch {
+      // Fallback below using uploaded document's extracted summary
+    }
+
+    if (!aiResponse) {
+      aiResponse = `Based on **${targetDocTitle}**: ${targetSummary || 'Your uploaded PDF has been indexed. Please ensure the backend service is online for full page-by-page RAG extraction.'}`;
+      citations = [{ page: 1, text: targetDocTitle }];
     }
 
     const aiMsg = {
@@ -477,37 +577,65 @@ export function AppProvider({ children }) {
 
     setConversations(prev => ({
       ...prev,
-      [selectedDocId]: [...(prev[selectedDocId] || []), userMsg, aiMsg]
+      [targetDocId]: [...(prev[targetDocId] || []), aiMsg]
     }));
   };
 
-  const uploadDocument = (docMeta) => {
-    const newDoc = {
-      id: `doc-${Date.now()}`,
-      title: docMeta.name || "Executive_Strategy_Doc.pdf",
-      size: `${(docMeta.size / (1024 * 1024)).toFixed(1)} MB`,
-      pages: Math.floor(Math.random() * 30) + 12,
-      uploadedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      uploadedBy: currentUser.name,
-      status: "ready",
-      summary: "AI document intelligence extracted: This newly uploaded report outlines strategic KPIs, governance policies, and tactical objectives. All key tables and sections have been indexed in vector storage.",
-      keyPoints: [
-        "Document ingested and verified against corporate schema.",
-        "Key performance indicators successfully extracted.",
-        "Vector embeddings ready for context-grounded queries."
-      ],
-      recommendations: [
-        "Review Section 3 for compliance directives.",
-        "Share synthesis with department heads."
-      ]
-    };
+  const uploadDocument = async (file) => {
+    if (!file) return;
+    const fileSizeLabel = file.size >= 1024 * 1024
+      ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+
+    let uploadedDoc = null;
+    try {
+      const res = await api.uploadDocument(file);
+      if (res?.id) {
+        uploadedDoc = {
+          id: res.id,
+          title: res.filename || file.name,
+          size: res.file_size || fileSizeLabel,
+          pages: res.page_count || 1,
+          uploadedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          uploadedBy: currentUser.name,
+          status: res.status || "ready",
+          summary: res.summary || `Extracted ${res.page_count || 1} page(s) from "${file.name}".`,
+          keyPoints: [
+            `Uploaded file: ${res.filename || file.name}`,
+            `Pages extracted: ${res.page_count || 1}`,
+            "Indexed and ready for context-grounded questions."
+          ],
+          recommendations: [
+            "Ask questions in the chat panel to retrieve exact page citations."
+          ]
+        };
+      }
+    } catch {
+      // Fallback to local metadata entry if backend is waking up
+    }
+
+    if (!uploadedDoc) {
+      uploadedDoc = {
+        id: `doc-${Date.now()}`,
+        title: file.name || "Uploaded_Document.pdf",
+        size: fileSizeLabel,
+        pages: 1,
+        uploadedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        uploadedBy: currentUser.name,
+        status: "ready",
+        summary: `PDF "${file.name}" (${fileSizeLabel}) added. Re-upload when backend is awake for full PyMuPDF text extraction.`,
+        keyPoints: [`File "${file.name}" uploaded from local device.`],
+        recommendations: ["Ask questions about this PDF in the chat panel."]
+      };
+    }
+
     setDocuments(prev => {
-      const next = [newDoc, ...prev];
+      const next = [uploadedDoc, ...prev.filter(d => d.id !== uploadedDoc.id)];
       writeStorage(STORAGE_KEYS.documents, next);
       return next;
     });
-    setSelectedDocId(newDoc.id);
-    showToast(`"${newDoc.title}" uploaded and indexed successfully!`);
+    setSelectedDocId(uploadedDoc.id);
+    showToast(`"${uploadedDoc.title}" uploaded and ready across your workspace!`);
   };
 
   const deleteDocument = async (docId) => {
@@ -572,26 +700,47 @@ export function AppProvider({ children }) {
     }
   };
 
-  // Reports
+  // Reports (starts empty; generated from the user's uploaded dataset)
   const [reports, setReports] = useState(() => {
-    const saved = readStorage(STORAGE_KEYS.reports, null);
+    const saved = readStorage(STORAGE_KEYS.reports, []);
     const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedReportIds, []));
-    const base = saved !== null ? saved : mockGeneratedReports;
-    return base.filter(r => !deletedIds.has(r.id));
+    return Array.isArray(saved) ? saved.filter(r => !deletedIds.has(r.id)) : [];
   });
 
   const generateReportFromData = async (name, category = "Executive MIS") => {
-    const reportFilename = name || `Executive_MIS_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    if (!dataset || dataset.length === 0) {
+      showToast('Please upload a CSV or Excel dataset first before generating a report.', 'warning');
+      return;
+    }
+
+    const baseDatasetName = (datasetName || 'Uploaded_Dataset').replace(/\.(csv|xlsx|xls)$/i, '');
+    const reportFilename = name || `${baseDatasetName}_MIS_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
     const tempId = `rep-${Date.now()}`;
+
+    const cols = Object.keys(dataset[0] || {});
+    const numericCols = datasetAnalysis.numericColumns || [];
+    const primaryMetricCol = numericCols.find((c) => !/^(id|.*_id|sr_?no|index)$/i.test(c)) || numericCols[0];
+
+    const dynamicKpis = [`Records: ${dataset.length}`, `Columns: ${cols.length}`];
+    if (primaryMetricCol) {
+      const sum = dataset.reduce((acc, r) => acc + (typeof r[primaryMetricCol] === 'number' ? r[primaryMetricCol] : 0), 0);
+      dynamicKpis.push(`Total ${primaryMetricCol}: ${sum.toLocaleString(undefined, { maximumFractionDigits: 1 })}`);
+    }
+    if (cleaningStats.missingValuesImputed > 0) {
+      dynamicKpis.push(`Nulls Imputed: ${cleaningStats.missingValuesImputed}`);
+    }
+
     const newRep = {
       id: tempId,
       name: reportFilename,
       category: category,
       format: reportFilename.toLowerCase().endsWith('.pdf') ? "PDF" : "Excel",
-      size: "1.2 MB",
+      size: "Pending...",
       generatedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       generatedBy: currentUser.name,
-      kpisIncluded: [`Cleaned records: ${dataset.length}`, "Regional Summary", "Gross Margin Analysis"],
+      sourceDataset: datasetName,
+      kpisIncluded: dynamicKpis,
+      rowsSnapshot: dataset.slice(0, 500),
       downloadCount: 0
     };
     setReports(prev => {
@@ -599,19 +748,79 @@ export function AppProvider({ children }) {
       writeStorage(STORAGE_KEYS.reports, next);
       return next;
     });
-    showToast(`Report "${newRep.name}" generated and ready for download!`);
+    showToast(`Generating report "${newRep.name}" from "${datasetName}"...`);
 
     try {
-      const created = await api.generateReport(reportFilename, category);
+      const created = await api.generateReport({
+        report_name: reportFilename,
+        dataset_id: activeDatasetId,
+        category,
+        dataset_name: datasetName,
+        rows: dataset.slice(0, 500),
+        imputation_details: cleaningStats.imputationDetails || []
+      });
       if (created?.id) {
         setReports(prev => {
-          const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || r.size } : r));
+          const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || '14.2 KB' } : r));
           writeStorage(STORAGE_KEYS.reports, updated);
           return updated;
         });
       }
     } catch (e) {
-      // Local state already updated
+      setReports(prev => {
+        const updated = prev.map(r => (r.id === tempId ? { ...r, size: `${Math.max(1, Math.round(JSON.stringify(dataset).length / 1024))} KB` } : r));
+        writeStorage(STORAGE_KEYS.reports, updated);
+        return updated;
+      });
+    }
+  };
+
+  const downloadReport = async (report) => {
+    if (!report) return;
+    try {
+      const res = await fetch(api.getReportDownloadUrl(report.id));
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = report.name || 'Executive_MIS_Report.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        showToast(`Downloaded ${report.name}`);
+        return;
+      }
+    } catch {
+      // Fall back to exporting snapshot rows as CSV
+    }
+
+    const rowsToExport = report.rowsSnapshot?.length ? report.rowsSnapshot : dataset;
+    if (rowsToExport && rowsToExport.length > 0) {
+      const headers = Object.keys(rowsToExport[0]);
+      const csvLines = [
+        headers.join(','),
+        ...rowsToExport.map(row =>
+          headers.map(h => {
+            const val = row[h] ?? '';
+            const str = String(val);
+            return str.includes(',') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
+          }).join(',')
+        )
+      ];
+      const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (report.name || 'Report').replace(/\.(xlsx|xls|pdf)$/i, '') + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      showToast(`Downloaded ${a.download}`);
+    } else {
+      showToast('Report file is no longer available on the server.', 'warning');
     }
   };
 
@@ -663,8 +872,8 @@ export function AppProvider({ children }) {
         cleaningStats,
         cleanData,
         resetData,
+        clearDataset,
         loadUploadedDataset,
-        restoreSampleDataset,
         isDatasetUploading,
         documents,
         deleteDocument,
@@ -679,6 +888,7 @@ export function AppProvider({ children }) {
         triggerWorkflow,
         reports,
         generateReportFromData,
+        downloadReport,
         deleteReport
       }}
     >

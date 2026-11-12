@@ -40,20 +40,22 @@ export default function Research() {
     setQuestionInput('');
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.endsWith('.pdf')) {
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
       showToast('Please upload a PDF document.', 'warning');
       return;
     }
 
     setIsUploading(true);
-    setTimeout(() => {
-      uploadDocument(file);
+    try {
+      await uploadDocument(file);
+    } finally {
       setIsUploading(false);
-    }, 1200);
+      e.target.value = '';
+    }
   };
 
   const samplePrompts = [
@@ -103,54 +105,62 @@ export default function Research() {
           </div>
 
           <div className="p-2 overflow-y-auto flex-1 divide-y divide-[#F1F5F9] space-y-1">
-            {documents.map((doc) => {
-              const isSelected = doc.id === selectedDocId;
-              return (
-                <div
-                  key={doc.id}
-                  onClick={() => setSelectedDocId(doc.id)}
-                  className={`p-3 rounded-lg cursor-pointer transition-all ${
-                    isSelected
-                      ? 'bg-blue-50/80 border border-blue-200 shadow-xs'
-                      : 'hover:bg-[#F8FAFC] border border-transparent'
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-1.5">
-                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                      <div className={`p-2 rounded-lg shrink-0 ${isSelected ? 'bg-blue-600 text-white' : 'bg-red-50 text-red-600'}`}>
-                        <FileText className="w-4 h-4" />
+            {documents.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-4 text-[#64748B]">
+                <FileText className="w-7 h-7 mb-2 text-slate-300" />
+                <p className="text-xs font-semibold text-[#1E293B]">No PDFs Uploaded</p>
+                <p className="text-[11px] mt-1">Click "Upload PDF" above to index a document from your computer.</p>
+              </div>
+            ) : (
+              documents.map((doc) => {
+                const isSelected = doc.id === selectedDocId;
+                return (
+                  <div
+                    key={doc.id}
+                    onClick={() => setSelectedDocId(doc.id)}
+                    className={`p-3 rounded-lg cursor-pointer transition-all ${
+                      isSelected
+                        ? 'bg-blue-50/80 border border-blue-200 shadow-xs'
+                        : 'hover:bg-[#F8FAFC] border border-transparent'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-1.5">
+                      <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                        <div className={`p-2 rounded-lg shrink-0 ${isSelected ? 'bg-blue-600 text-white' : 'bg-red-50 text-red-600'}`}>
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-[#1E293B] truncate" title={doc.title}>
+                            {doc.title}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-[#64748B]">
+                            <span>{doc.pages} pages</span>
+                            <span>•</span>
+                            <span>{doc.size}</span>
+                          </div>
+                          <div className="mt-1.5 flex items-center gap-1 text-[10px] text-[#16A34A] font-medium">
+                            <CheckCircle2 className="w-3 h-3" /> Indexed in pgvector
+                          </div>
+                        </div>
                       </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-semibold text-[#1E293B] truncate" title={doc.title}>
-                          {doc.title}
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 text-[11px] text-[#64748B]">
-                          <span>{doc.pages} pages</span>
-                          <span>•</span>
-                          <span>{doc.size}</span>
-                        </div>
-                        <div className="mt-1.5 flex items-center gap-1 text-[10px] text-[#16A34A] font-medium">
-                          <CheckCircle2 className="w-3 h-3" /> Indexed in pgvector
-                        </div>
-                      </div>
-                    </div>
 
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (window.confirm(`Delete "${doc.title}"?`)) {
-                          deleteDocument(doc.id);
-                        }
-                      }}
-                      className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
-                      title="Delete PDF"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Delete "${doc.title}"?`)) {
+                            deleteDocument(doc.id);
+                          }
+                        }}
+                        className="p-1 rounded text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                        title="Delete PDF"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
 
           {/* Upload Hint Box */}
