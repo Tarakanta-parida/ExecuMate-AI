@@ -46,6 +46,26 @@ def _choose_numeric_imputation(series: pd.Series, strategy: str = "auto") -> tup
     return fill_val, method
 
 
+def _df_to_clean_records(df: pd.DataFrame, limit: int = 500) -> list[dict]:
+    """Convert DataFrame rows to JSON-safe Python dicts (None for nulls, strings for dates)."""
+    subset = df.head(limit)
+    records = []
+    for _, row in subset.iterrows():
+        item = {}
+        for col in subset.columns:
+            val = row[col]
+            if pd.isna(val):
+                item[str(col)] = None
+            elif isinstance(val, pd.Timestamp):
+                item[str(col)] = val.strftime("%Y-%m-%d") if val.hour == 0 and val.minute == 0 and val.second == 0 else val.isoformat()
+            elif hasattr(val, "item"):
+                item[str(col)] = val.item()
+            else:
+                item[str(col)] = val
+        records.append(item)
+    return records
+
+
 def analyze_dataset(file_path: str):
     df = _load_dataframe(file_path)
 
@@ -55,8 +75,7 @@ def analyze_dataset(file_path: str):
     missing_counts = {str(k): int(v) for k, v in df.isnull().sum().to_dict().items()}
     total_missing_cells = int(df.isnull().sum().sum())
 
-    # Preview top 10 rows
-    preview = df.head(10).replace({np.nan: None}).to_dict(orient="records")
+    rows = _df_to_clean_records(df, limit=500)
 
     return {
         "total_rows": total_rows,
@@ -64,8 +83,9 @@ def analyze_dataset(file_path: str):
         "duplicate_count": duplicate_count,
         "missing_counts": missing_counts,
         "total_missing_cells": total_missing_cells,
-        "columns": list(df.columns),
-        "preview": preview
+        "columns": [str(c) for c in df.columns],
+        "preview": rows[:15],
+        "rows": rows
     }
 
 
@@ -129,7 +149,7 @@ def clean_and_process_dataset(file_path: str, output_path: str = None, strategy:
         else:
             df.to_excel(output_path, index=False)
 
-    cleaned_preview = df.head(15).replace({np.nan: None}).to_dict(orient="records")
+    cleaned_rows = _df_to_clean_records(df, limit=500)
 
     return {
         "initial_rows": initial_rows,
@@ -139,7 +159,8 @@ def clean_and_process_dataset(file_path: str, output_path: str = None, strategy:
         "strategy": strategy,
         "imputation_details": imputation_details,
         "kpis": kpis,
-        "columns": list(df.columns),
-        "preview": cleaned_preview
+        "columns": [str(c) for c in df.columns],
+        "preview": cleaned_rows[:15],
+        "rows": cleaned_rows
     }
 

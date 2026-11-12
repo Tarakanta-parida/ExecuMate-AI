@@ -14,17 +14,20 @@ router = APIRouter(prefix="/api/data", tags=["Data Analytics & MIS"])
 
 @router.post("/upload", response_model=DatasetResponse)
 async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not (file.filename.endswith(".csv") or file.filename.endswith(".xlsx") or file.filename.endswith(".xls")):
+    safe_name = os.path.basename(file.filename or "")
+    lower_name = safe_name.lower()
+    if not (lower_name.endswith(".csv") or lower_name.endswith(".xlsx") or lower_name.endswith(".xls")):
         raise HTTPException(status_code=400, detail="Only CSV and Excel files are supported.")
 
-    file_path = os.path.join(settings.UPLOAD_DIR, file.filename)
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    file_path = os.path.join(settings.UPLOAD_DIR, safe_name)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     analysis = analyze_dataset(file_path)
 
     ds = Dataset(
-        filename=file.filename,
+        filename=safe_name,
         storage_path=file_path,
         row_count=analysis["total_rows"],
         column_count=analysis["total_cols"],
@@ -34,7 +37,18 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
     db.add(ds)
     db.commit()
     db.refresh(ds)
-    return ds
+
+    return DatasetResponse(
+        id=ds.id,
+        filename=ds.filename,
+        row_count=ds.row_count,
+        column_count=ds.column_count,
+        is_cleaned=ds.is_cleaned,
+        status=ds.status,
+        created_at=ds.created_at,
+        columns=analysis["columns"],
+        rows=analysis["rows"]
+    )
 
 @router.get("/{dataset_id}/preview")
 def preview_dataset(dataset_id: str, db: Session = Depends(get_db)):

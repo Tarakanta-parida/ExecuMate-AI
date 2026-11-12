@@ -42,6 +42,8 @@ export default function Analytics() {
     cleanData,
     resetData,
     loadUploadedDataset,
+    restoreSampleDataset,
+    isDatasetUploading,
     generateReportFromData
   } = useApp();
 
@@ -49,6 +51,78 @@ export default function Analytics() {
   const [selectedRegion, setSelectedRegion] = useState('All');
   const [sortField, setSortField] = useState('revenue');
   const [sortDirection, setSortDirection] = useState('desc');
+
+  const isStandardSchema = useMemo(() => {
+    if (!dataset || dataset.length === 0) return true;
+    const cols = Object.keys(dataset[0]);
+    return ['id', 'date', 'region', 'category', 'units', 'revenue', 'margin'].every((k) => cols.includes(k));
+  }, [dataset]);
+
+  const dynamicColumns = useMemo(() => {
+    if (!dataset || dataset.length === 0) return [];
+    return Object.keys(dataset[0]);
+  }, [dataset]);
+
+  const customProfile = useMemo(() => {
+    if (isStandardSchema || !dataset || dataset.length === 0) return null;
+    const numCols = datasetAnalysis.numericColumns || [];
+    const nonIdNumCols = numCols.filter((c) => !/^(id|.*_id|sr_?no|index)$/i.test(c));
+    const metricCol = nonIdNumCols[0] || numCols[0] || null;
+
+    const textCols = dynamicColumns.filter((c) => !numCols.includes(c));
+    const nonDateTextCols = textCols.filter((c) => !/date|time|id/i.test(c));
+    const groupCol = nonDateTextCols[0] || textCols[0] || null;
+    const altGroupCol = nonDateTextCols[1] || groupCol;
+
+    let metricSum = 0;
+    let metricCount = 0;
+    if (metricCol) {
+      for (const r of dataset) {
+        if (typeof r[metricCol] === 'number' && Number.isFinite(r[metricCol])) {
+          metricSum += r[metricCol];
+          metricCount++;
+        }
+      }
+    }
+    const metricAvg = metricCount > 0 ? metricSum / metricCount : 0;
+
+    const barMap = {};
+    const pieMap = {};
+    if (groupCol) {
+      for (const r of dataset) {
+        const gKey = r[groupCol] !== null && r[groupCol] !== undefined ? String(r[groupCol]) : 'Unknown';
+        const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
+        barMap[gKey] = (barMap[gKey] || 0) + val;
+      }
+    }
+    if (altGroupCol) {
+      for (const r of dataset) {
+        const pKey = r[altGroupCol] !== null && r[altGroupCol] !== undefined ? String(r[altGroupCol]) : 'Other';
+        const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
+        pieMap[pKey] = (pieMap[pKey] || 0) + val;
+      }
+    }
+
+    const barData = Object.entries(barMap)
+      .map(([name, value]) => ({ region: name, revenue: Number(value.toFixed(2)) }))
+      .sort((a, b) => b.revenue - a.revenue)
+      .slice(0, 8);
+
+    const pieData = Object.entries(pieMap)
+      .map(([name, value]) => ({ name, value: Number(value.toFixed(2)) }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 6);
+
+    return {
+      metricCol,
+      groupCol,
+      altGroupCol,
+      metricSum,
+      metricAvg,
+      barData,
+      pieData
+    };
+  }, [isStandardSchema, dataset, datasetAnalysis, dynamicColumns]);
 
   // Computed KPIs from the current dataset
   const kpis = useMemo(() => {
@@ -83,6 +157,9 @@ export default function Analytics() {
 
   // Chart aggregates by Region
   const regionChartData = useMemo(() => {
+    if (!isStandardSchema && customProfile) {
+      return customProfile.barData;
+    }
     const map = {};
     for (const r of dataset) {
       const reg = r.region || 'Unknown';
@@ -91,10 +168,13 @@ export default function Analytics() {
       if (typeof r.units === 'number') map[reg].units += r.units;
     }
     return Object.values(map);
-  }, [dataset]);
+  }, [dataset, isStandardSchema, customProfile]);
 
   // Chart aggregates by Category
   const categoryChartData = useMemo(() => {
+    if (!isStandardSchema && customProfile) {
+      return customProfile.pieData;
+    }
     const map = {};
     for (const r of dataset) {
       const cat = r.category || 'Other';
@@ -102,9 +182,9 @@ export default function Analytics() {
       if (typeof r.revenue === 'number') map[cat].value += r.revenue;
     }
     return Object.values(map);
-  }, [dataset]);
+  }, [dataset, isStandardSchema, customProfile]);
 
-  const COLORS = ['#2563EB', '#16A34A', '#D97706', '#9333EA'];
+  const COLORS = ['#2563EB', '#16A34A', '#D97706', '#9333EA', '#0EA5E9', '#EC4899'];
 
   const availableRegions = useMemo(() => {
     const regs = new Set();
@@ -112,17 +192,6 @@ export default function Analytics() {
       if (r.region) regs.add(r.region);
     }
     return Array.from(regs);
-  }, [dataset]);
-
-  const isStandardSchema = useMemo(() => {
-    if (!dataset || dataset.length === 0) return true;
-    const cols = Object.keys(dataset[0]);
-    return ['id', 'date', 'region', 'category', 'units', 'revenue', 'margin'].every((k) => cols.includes(k));
-  }, [dataset]);
-
-  const dynamicColumns = useMemo(() => {
-    if (!dataset || dataset.length === 0) return [];
-    return Object.keys(dataset[0]);
   }, [dataset]);
 
   // Filter & sort dataset for the preview table
@@ -184,11 +253,21 @@ export default function Analytics() {
 
         {/* Global Action Buttons */}
         <div className="flex flex-wrap items-center gap-2.5">
-          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors">
+          <label className={`inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors ${isDatasetUploading ? 'opacity-60 pointer-events-none' : ''}`}>
             <Upload className="w-4 h-4 text-[#2563EB]" />
-            <span>Upload CSV / Excel</span>
-            <input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} />
+            <span>{isDatasetUploading ? 'Uploading...' : 'Upload CSV / Excel'}</span>
+            <input type="file" accept=".csv, .xlsx, .xls" className="hidden" disabled={isDatasetUploading} onChange={handleFileUpload} />
           </label>
+
+          {datasetName !== 'regional_sales_q4_uncleaned.csv' && (
+            <button
+              onClick={restoreSampleDataset}
+              className="px-3 py-2 text-xs font-semibold text-[#64748B] hover:text-[#1E293B] bg-white border border-[#CBD5E1] rounded-lg transition-colors"
+              title="Switch back to built-in sample dataset"
+            >
+              Sample Data
+            </button>
+          )}
 
           <select
             value={imputationStrategy}
@@ -319,24 +398,57 @@ export default function Analytics() {
         )}
 
         {/* Dynamic KPI Bar */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
-          <div className="p-3 bg-[#F8FAFC] rounded-lg">
-            <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Revenue</span>
-            <div className="text-lg font-bold text-[#1E293B] mt-0.5">{kpis.totalRev}</div>
+        {isStandardSchema ? (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Revenue</span>
+              <div className="text-lg font-bold text-[#1E293B] mt-0.5">{kpis.totalRev}</div>
+            </div>
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Avg Gross Margin</span>
+              <div className="text-lg font-bold text-emerald-600 mt-0.5">{kpis.avgMargin}</div>
+            </div>
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Units Sold</span>
+              <div className="text-lg font-bold text-[#1E293B] mt-0.5">{kpis.totalUnits}</div>
+            </div>
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Enterprise Share</span>
+              <div className="text-lg font-bold text-[#2563EB] mt-0.5">{kpis.enterprisePct}</div>
+            </div>
           </div>
-          <div className="p-3 bg-[#F8FAFC] rounded-lg">
-            <span className="text-[11px] font-semibold text-[#64748B] uppercase">Avg Gross Margin</span>
-            <div className="text-lg font-bold text-emerald-600 mt-0.5">{kpis.avgMargin}</div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Records</span>
+              <div className="text-lg font-bold text-[#1E293B] mt-0.5">{dataset.length.toLocaleString()}</div>
+            </div>
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Numeric Columns</span>
+              <div className="text-lg font-bold text-emerald-600 mt-0.5">{datasetAnalysis.numericColumns.length}</div>
+            </div>
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
+                {customProfile?.metricCol ? `Total ${customProfile.metricCol}` : 'Total Columns'}
+              </span>
+              <div className="text-lg font-bold text-[#1E293B] mt-0.5">
+                {customProfile?.metricCol
+                  ? customProfile.metricSum.toLocaleString(undefined, { maximumFractionDigits: 1 })
+                  : dynamicColumns.length}
+              </div>
+            </div>
+            <div className="p-3 bg-[#F8FAFC] rounded-lg">
+              <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
+                {customProfile?.metricCol ? `Avg ${customProfile.metricCol}` : 'Data Completeness'}
+              </span>
+              <div className="text-lg font-bold text-[#2563EB] mt-0.5">
+                {customProfile?.metricCol
+                  ? customProfile.metricAvg.toLocaleString(undefined, { maximumFractionDigits: 1 })
+                  : `${isDataCleaned ? 100 : datasetAnalysis.qualityScore}%`}
+              </div>
+            </div>
           </div>
-          <div className="p-3 bg-[#F8FAFC] rounded-lg">
-            <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Units Sold</span>
-            <div className="text-lg font-bold text-[#1E293B] mt-0.5">{kpis.totalUnits}</div>
-          </div>
-          <div className="p-3 bg-[#F8FAFC] rounded-lg">
-            <span className="text-[11px] font-semibold text-[#64748B] uppercase">Enterprise Share</span>
-            <div className="text-lg font-bold text-[#2563EB] mt-0.5">{kpis.enterprisePct}</div>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Visual Analytics Charts */}
@@ -344,8 +456,18 @@ export default function Analytics() {
         <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-sm font-bold text-[#1E293B]">Revenue by Geographic Region</h2>
-              <p className="text-xs text-[#64748B]">Consolidated gross revenue breakdown ($USD)</p>
+              <h2 className="text-sm font-bold text-[#1E293B]">
+                {isStandardSchema
+                  ? 'Revenue by Geographic Region'
+                  : customProfile?.groupCol
+                    ? `${customProfile.metricCol || 'Count'} by ${customProfile.groupCol}`
+                    : 'Dataset Breakdown'}
+              </h2>
+              <p className="text-xs text-[#64748B]">
+                {isStandardSchema
+                  ? 'Consolidated gross revenue breakdown ($USD)'
+                  : `Aggregated from uploaded file (${datasetName})`}
+              </p>
             </div>
             <span className="text-xs font-semibold text-[#2563EB] bg-blue-50 px-2 py-1 rounded">
               Aggregated
@@ -356,9 +478,23 @@ export default function Analytics() {
               <BarChart data={regionChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
                 <XAxis dataKey="region" stroke="#94A3B8" fontSize={12} tickLine={false} />
-                <YAxis stroke="#94A3B8" fontSize={12} tickLine={false} tickFormatter={(v) => `$${v / 1000}k`} />
+                <YAxis
+                  stroke="#94A3B8"
+                  fontSize={12}
+                  tickLine={false}
+                  tickFormatter={(v) =>
+                    isStandardSchema
+                      ? `$${v / 1000}k`
+                      : v >= 1000
+                        ? `${(v / 1000).toFixed(1)}k`
+                        : `${v}`
+                  }
+                />
                 <Tooltip
-                  formatter={(v) => [`$${v.toLocaleString()}`, 'Revenue']}
+                  formatter={(v) => [
+                    isStandardSchema ? `$${v.toLocaleString()}` : v.toLocaleString(),
+                    isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Count')
+                  ]}
                   contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
                 />
                 <Bar dataKey="revenue" fill="#2563EB" radius={[4, 4, 0, 0]} />
@@ -369,8 +505,16 @@ export default function Analytics() {
 
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm flex flex-col justify-between">
           <div>
-            <h2 className="text-sm font-bold text-[#1E293B]">Revenue by Category</h2>
-            <p className="text-xs text-[#64748B] mb-2">Mix of Cloud SaaS vs Hardware vs Services</p>
+            <h2 className="text-sm font-bold text-[#1E293B]">
+              {isStandardSchema
+                ? 'Revenue by Category'
+                : customProfile?.altGroupCol
+                  ? `Share by ${customProfile.altGroupCol}`
+                  : 'Distribution'}
+            </h2>
+            <p className="text-xs text-[#64748B] mb-2">
+              {isStandardSchema ? 'Mix of Cloud SaaS vs Hardware vs Services' : 'Top segment breakdown'}
+            </p>
             <div className="h-48 w-full flex items-center justify-center">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -389,7 +533,10 @@ export default function Analytics() {
                     ))}
                   </Pie>
                   <Tooltip
-                    formatter={(v) => [`$${v.toLocaleString()}`, 'Revenue']}
+                    formatter={(v) => [
+                      isStandardSchema ? `$${v.toLocaleString()}` : v.toLocaleString(),
+                      isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Count')
+                    ]}
                     contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
                   />
                 </PieChart>
@@ -400,11 +547,17 @@ export default function Analytics() {
           <div className="space-y-1.5 pt-2 border-t border-[#F1F5F9]">
             {categoryChartData.map((cat, idx) => (
               <div key={idx} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
-                  <span className="text-[#1E293B] font-medium">{cat.name}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
+                  <span className="text-[#1E293B] font-medium truncate">{cat.name}</span>
                 </div>
-                <span className="font-semibold text-[#64748B]">${(cat.value / 1000).toFixed(1)}k</span>
+                <span className="font-semibold text-[#64748B] shrink-0">
+                  {isStandardSchema
+                    ? `$${(cat.value / 1000).toFixed(1)}k`
+                    : cat.value >= 1000
+                      ? `${(cat.value / 1000).toFixed(1)}k`
+                      : cat.value.toLocaleString()}
+                </span>
               </div>
             ))}
           </div>

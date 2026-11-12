@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict
 from datetime import datetime, date
 
 class UserBase(BaseModel):
@@ -103,6 +103,8 @@ class DatasetResponse(BaseModel):
     is_cleaned: bool
     status: str
     created_at: datetime
+    columns: List[str] = []
+    rows: List[Dict[str, Any]] = []
     class Config:
         from_attributes = True
 

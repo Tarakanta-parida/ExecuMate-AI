@@ -264,8 +264,19 @@ function splitCsvLine(line) {
   return result;
 }
 
+function parseNumericCell(raw) {
+  if (/^-?\d+(\.\d+)?$/.test(raw)) {
+    return Number(raw);
+  }
+  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw)) {
+    return Number(raw.replace(/,/g, ''));
+  }
+  return null;
+}
+
 export function parseCsvText(text) {
-  const lines = text
+  const cleanText = text.replace(/^\uFEFF/, '');
+  const lines = cleanText
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
     .split('\n')
@@ -285,10 +296,9 @@ export function parseCsvText(text) {
       const raw = cells[idx] ?? '';
       if (isMissingValue(raw)) {
         row[header] = null;
-      } else if (/^-?\d+(\.\d+)?$/.test(raw)) {
-        row[header] = Number(raw);
       } else {
-        row[header] = raw;
+        const num = parseNumericCell(raw);
+        row[header] = num !== null ? num : raw;
       }
     });
     rows.push(row);

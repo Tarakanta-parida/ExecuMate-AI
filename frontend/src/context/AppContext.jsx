@@ -349,40 +349,73 @@ export function AppProvider({ children }) {
     showToast('Dataset reset to original raw file.', 'info');
   };
 
+  const [isDatasetUploading, setIsDatasetUploading] = useState(false);
+
+  const applyDatasetRows = (rows, fileName) => {
+    const cleaned = cleanDatasetRows(rows, imputationStrategy);
+    setRawDataset(rows);
+    setDataset(cleaned.cleanedRows);
+    setDatasetName(fileName);
+    setIsDataCleaned(true);
+    setCleaningStats({
+      duplicatesRemoved: cleaned.duplicatesRemoved,
+      missingValuesImputed: cleaned.missingValuesImputed,
+      initialRows: cleaned.initialRows,
+      currentRows: cleaned.currentRows,
+      cleanQualityScore: cleaned.cleanQualityScore,
+      strategy: imputationStrategy,
+      imputationDetails: cleaned.imputationDetails
+    });
+    const summaryText = cleaned.imputationDetails
+      .filter((d) => d.isNumeric)
+      .map((d) => `${d.column} -> ${d.value} (${d.method})`)
+      .join(', ');
+    showToast(
+      summaryText
+        ? `Loaded "${fileName}" (${rows.length} rows) and replaced ${cleaned.missingValuesImputed} nulls (${summaryText}).`
+        : `Loaded dataset "${fileName}" (${cleaned.currentRows} rows).`,
+      'success'
+    );
+  };
+
   const loadUploadedDataset = async (file) => {
     if (!file) return;
-    if (file.name.toLowerCase().endsWith('.csv')) {
-      const text = await file.text();
-      const { rows } = parseCsvText(text);
-      if (rows.length > 0) {
-        const cleaned = cleanDatasetRows(rows, imputationStrategy);
-        setRawDataset(rows);
-        setDataset(cleaned.cleanedRows);
-        setDatasetName(file.name);
-        setIsDataCleaned(true);
-        setCleaningStats({
-          duplicatesRemoved: cleaned.duplicatesRemoved,
-          missingValuesImputed: cleaned.missingValuesImputed,
-          initialRows: cleaned.initialRows,
-          currentRows: cleaned.currentRows,
-          cleanQualityScore: cleaned.cleanQualityScore,
-          strategy: imputationStrategy,
-          imputationDetails: cleaned.imputationDetails
-        });
-        const summaryText = cleaned.imputationDetails
-          .filter((d) => d.isNumeric)
-          .map((d) => `${d.column} -> ${d.value} (${d.method})`)
-          .join(', ');
-        showToast(
-          summaryText
-            ? `Uploaded "${file.name}" (${rows.length} rows) and replaced ${cleaned.missingValuesImputed} nulls (${summaryText}).`
-            : `Uploaded dataset "${file.name}" with ${cleaned.currentRows} rows.`,
-          'success'
-        );
+    const lowerName = file.name.toLowerCase();
+    setIsDatasetUploading(true);
+    try {
+      if (lowerName.endsWith('.csv')) {
+        const text = await file.text();
+        const { rows } = parseCsvText(text);
+        if (rows.length > 0) {
+          applyDatasetRows(rows, file.name);
+          api.uploadDataset(file).catch(() => {});
+          return;
+        }
+        showToast(`"${file.name}" appears empty or has no data rows.`, 'warning');
         return;
       }
+
+      if (lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
+        showToast(`Uploading & parsing Excel file "${file.name}"...`, 'info');
+        const uploaded = await api.uploadDataset(file);
+        if (Array.isArray(uploaded?.rows) && uploaded.rows.length > 0) {
+          applyDatasetRows(uploaded.rows, uploaded.filename || file.name);
+          return;
+        }
+        showToast(`"${file.name}" appears empty or could not be parsed.`, 'warning');
+        return;
+      }
+
+      showToast('Unsupported file format. Please upload a .csv, .xlsx, or .xls file.', 'warning');
+    } catch (err) {
+      showToast(`Could not parse "${file.name}": ${err.message}. Try exporting as .csv if the backend is waking up.`, 'warning');
+    } finally {
+      setIsDatasetUploading(false);
     }
-    showToast(`Uploaded dataset "${file.name}" with ${dataset.length} rows previewed.`, 'success');
+  };
+
+  const restoreSampleDataset = () => {
+    applyDatasetRows(initialSampleDataset, 'regional_sales_q4_uncleaned.csv');
   };
 
   // AI Research Assistant Module
@@ -631,6 +664,8 @@ export function AppProvider({ children }) {
         cleanData,
         resetData,
         loadUploadedDataset,
+        restoreSampleDataset,
+        isDatasetUploading,
         documents,
         deleteDocument,
         selectedDocId,

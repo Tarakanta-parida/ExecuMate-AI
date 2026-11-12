@@ -3,9 +3,8 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000
 
 async function request(endpoint, options = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
-  const defaultHeaders = {
-    'Content-Type': 'application/json',
-  };
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const defaultHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
 
   try {
     const response = await fetch(url, {
@@ -83,6 +82,14 @@ export const api = {
     }),
 
   // Data Analytics
+  uploadDataset: (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request('/data/upload', {
+      method: 'POST',
+      body: formData,
+    });
+  },
   cleanDataset: (datasetId, strategy = 'auto') =>
     request(`/data/${datasetId}/clean?strategy=${encodeURIComponent(strategy)}`, {
       method: 'POST',
