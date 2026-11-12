@@ -439,6 +439,88 @@ function resolveKpiIconKey(col, aggType = 'total') {
   return 'metric';
 }
 
+export function formatCategoryLabel(col, rawVal) {
+  if (rawVal === null || rawVal === undefined || rawVal === '') return 'Unknown';
+  const strVal = String(rawVal);
+  if (/^sex$/i.test(col)) {
+    if (strVal === '1') return 'Male (1)';
+    if (strVal === '0') return 'Female (0)';
+  }
+  if (/^(target|outcome|condition|churn)$/i.test(col)) {
+    if (strVal === '1') return 'Positive (1)';
+    if (strVal === '0') return 'Negative (0)';
+  }
+  if (/^survived$/i.test(col)) {
+    if (strVal === '1') return 'Survived (1)';
+    if (strVal === '0') return 'Not Survived (0)';
+  }
+  if (/^pclass$/i.test(col)) {
+    return `Class ${strVal}`;
+  }
+  return strVal;
+}
+
+export function getDatasetColumnRoles(rows, columns = [], numericColumns = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const numSet = new Set(numericColumns || []);
+
+  const isIdColumn = (col) => /^(id|.*_id|po_?id|sr_?no|index|row_?id)$/i.test(col);
+  const isDateColumn = (col) => /date|time|timestamp|period|month|year/i.test(col);
+
+  // Compute distinct value counts (cardinality) using sample
+  const cardinality = {};
+  const sample = safeRows.slice(0, 1000);
+  for (const col of columns) {
+    const uniqueVals = new Set();
+    for (const r of sample) {
+      if (r[col] !== null && r[col] !== undefined && r[col] !== '') {
+        uniqueVals.add(r[col]);
+      }
+    }
+    cardinality[col] = uniqueVals.size;
+  }
+
+  // 1. String / enum categorical columns
+  const textCols = columns.filter((c) => !numSet.has(c) && !isIdColumn(c) && !isDateColumn(c));
+
+  // 2. Discrete numeric columns with low cardinality (e.g. sex: 0/1, target: 0/1, cp: 0/1/2/3, pclass: 1/2/3)
+  const discreteNumericCols = columns.filter((c) => {
+    if (!numSet.has(c) || isIdColumn(c)) return false;
+    const card = cardinality[c] || 0;
+    return card >= 2 && card <= 15 && card < safeRows.length;
+  });
+
+  const sortedDiscrete = [...discreteNumericCols].sort((a, b) => (cardinality[a] || 0) - (cardinality[b] || 0));
+  const categoricalCols = [...textCols, ...sortedDiscrete];
+
+  // Fallback if no categorical columns found: pick non-id columns with lowest cardinality
+  if (categoricalCols.length === 0) {
+    const nonIdCols = columns.filter((c) => !isIdColumn(c));
+    const sortedByCard = [...nonIdCols].sort((a, b) => (cardinality[a] || 0) - (cardinality[b] || 0));
+    if (sortedByCard.length > 0) categoricalCols.push(sortedByCard[0]);
+    if (sortedByCard.length > 1) categoricalCols.push(sortedByCard[1]);
+  }
+
+  // Continuous numeric metrics (higher cardinality or quantitative measurements)
+  const continuousMetrics = columns.filter((c) => {
+    if (!numSet.has(c) || isIdColumn(c)) return false;
+    const card = cardinality[c] || 0;
+    return card > 15 || !discreteNumericCols.includes(c);
+  });
+
+  const allNumericMetrics = (numericColumns || []).filter((c) => !isIdColumn(c));
+  const preferredMetrics = continuousMetrics.length > 0 ? continuousMetrics : allNumericMetrics;
+
+  return {
+    categoricalCols,
+    textCols,
+    discreteNumericCols,
+    continuousMetrics: preferredMetrics.length > 0 ? preferredMetrics : (columns.length > 0 ? [columns[0]] : []),
+    allMetrics: allNumericMetrics.length > 0 ? allNumericMetrics : (columns.length > 0 ? [columns[0]] : []),
+    cardinality
+  };
+}
+
 /**
  * Build up to 4 pure business KPI cards dynamically from any dataset's rows and numeric columns,
  * strictly ordered from most important (1st) to least important (4th).
@@ -631,13 +713,9 @@ function extractTimeBucket(rawVal) {
  */
 export function buildBusinessImpactCharts(rows, columns = [], numericColumns = [], preferredGroupCol = '') {
   const safeRows = Array.isArray(rows) ? rows : [];
-  const metrics = numericColumns.filter((c) => !/^(id|.*_id|sr_?no|index|po_?id)$/i.test(c));
-  const activeMetrics = metrics.length > 0 ? metrics : numericColumns;
-
-  const numSet = new Set(numericColumns);
-  const textCols = columns.filter(
-    (c) => !numSet.has(c) && !/^(id|.*_id|po_?id|sr_?no|index)$/i.test(c) && !/date|time/i.test(c)
-  );
+  const roles = getDatasetColumnRoles(safeRows, columns, numericColumns);
+  const textCols = roles.categoricalCols;
+  const activeMetrics = roles.continuousMetrics.length > 0 ? roles.continuousMetrics : roles.allMetrics;
 
   const qtyCol = activeMetrics.find((c) => /quantity|qty|units|volume|count/i.test(c) && !/defect|return|error/i.test(c));
   const revCol = activeMetrics.find((c) => /revenue|sales|total_?amount|amount|spend|income|turnover|gmv/i.test(c));
@@ -769,7 +847,8 @@ export function buildBusinessImpactCharts(rows, columns = [], numericColumns = [
 
   const impactGroups = {};
   for (const r of safeRows) {
-    const key = r[impactGroupCol] !== null && r[impactGroupCol] !== undefined ? String(r[impactGroupCol]) : 'Unknown';
+    const rawVal = r[impactGroupCol];
+    const key = formatCategoryLabel(impactGroupCol, rawVal);
     if (!impactGroups[key]) {
       impactGroups[key] = { label: key, count: 0, qtySum: 0, defectSum: 0, revSum: 0, marginSum: 0, m0Sum: 0, m1Sum: 0 };
     }

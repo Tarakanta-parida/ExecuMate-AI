@@ -52,3 +52,4 @@ const server = http.createServer((req, res) => {
 server.listen(port, host, () => {
   console.log(`ExecuMate frontend listening on http://${host}:${port}`);
 });
+

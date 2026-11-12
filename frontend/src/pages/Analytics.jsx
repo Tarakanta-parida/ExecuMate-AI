@@ -39,7 +39,12 @@ import {
   Line
 } from 'recharts';
 import { useApp } from '../context/AppContext';
-import { buildDatasetKpiCards, buildBusinessImpactCharts } from '../utils/dataCleaning';
+import {
+  buildDatasetKpiCards,
+  buildBusinessImpactCharts,
+  getDatasetColumnRoles,
+  formatCategoryLabel
+} from '../utils/dataCleaning';
 
 const KPI_ICON_MAP = {
   revenue: { Icon: DollarSign, badgeClass: 'bg-emerald-50 text-emerald-600' },
@@ -93,33 +98,31 @@ export default function Analytics() {
     return Object.keys(dataset[0]);
   }, [dataset]);
 
-  const numericMetrics = useMemo(() => {
-    const numCols = datasetAnalysis.numericColumns || [];
-    const nonId = numCols.filter((c) => !/^(id|.*_id|sr_?no|index|po_?id)$/i.test(c));
-    return nonId.length > 0 ? nonId : numCols;
-  }, [datasetAnalysis.numericColumns]);
+  const columnRoles = useMemo(() => {
+    return getDatasetColumnRoles(dataset, dynamicColumns, datasetAnalysis.numericColumns);
+  }, [dataset, dynamicColumns, datasetAnalysis.numericColumns]);
 
   const slicerColumns = useMemo(() => {
-    const numSet = new Set(datasetAnalysis.numericColumns || []);
-    const categorical = dynamicColumns.filter(
-      (c) => !numSet.has(c) && !/^(id|.*_id|po_?id|sr_?no|index)$/i.test(c) && !/date|time/i.test(c)
-    );
-    if (categorical.length > 0) return categorical;
-    return dynamicColumns.filter((c) => !numSet.has(c));
-  }, [dynamicColumns, datasetAnalysis.numericColumns]);
+    return columnRoles.categoricalCols;
+  }, [columnRoles]);
+
+  const numericMetrics = useMemo(() => {
+    return columnRoles.allMetrics;
+  }, [columnRoles]);
 
   // Reset slicer & chart metric when a new dataset is loaded
   useEffect(() => {
     setSlicerColumn(slicerColumns[0] || '');
     setSlicerValue('All');
-    setChartMetric(numericMetrics[0] || '');
+    const defaultMetric = columnRoles.continuousMetrics.find((m) => m !== slicerColumns[0]) || numericMetrics[0] || '';
+    setChartMetric(defaultMetric);
   }, [datasetName, slicerColumns.join('|'), numericMetrics.join('|')]);
 
   const slicerOptions = useMemo(() => {
     if (!slicerColumn || !dataset || dataset.length === 0) return [];
     const counts = {};
     for (const r of dataset) {
-      const val = r[slicerColumn] !== null && r[slicerColumn] !== undefined ? String(r[slicerColumn]) : 'Unknown';
+      const val = formatCategoryLabel(slicerColumn, r[slicerColumn]);
       counts[val] = (counts[val] || 0) + 1;
     }
     return Object.entries(counts)
@@ -130,8 +133,9 @@ export default function Analytics() {
   const slicedDataset = useMemo(() => {
     if (!slicerColumn || slicerValue === 'All') return dataset;
     return dataset.filter((r) => {
-      const val = r[slicerColumn] !== null && r[slicerColumn] !== undefined ? String(r[slicerColumn]) : 'Unknown';
-      return val === slicerValue;
+      const raw = r[slicerColumn];
+      const formatted = formatCategoryLabel(slicerColumn, raw);
+      return formatted === slicerValue || String(raw) === slicerValue;
     });
   }, [dataset, slicerColumn, slicerValue]);
 
@@ -145,43 +149,63 @@ export default function Analytics() {
 
   const customProfile = useMemo(() => {
     if (isStandardSchema || !slicedDataset || slicedDataset.length === 0) return null;
-    const metricCol = (chartMetric && numericMetrics.includes(chartMetric)) ? chartMetric : numericMetrics[0] || null;
 
-    const textCols = slicerColumns.length > 0 ? slicerColumns : dynamicColumns.filter((c) => !numericMetrics.includes(c));
-    const groupCol = slicerColumn && textCols.includes(slicerColumn) ? slicerColumn : textCols[0] || null;
-    const altGroupCol = textCols.find((c) => c !== groupCol) || groupCol;
+    const groupCol =
+      slicerColumn && slicerColumns.includes(slicerColumn)
+        ? slicerColumn
+        : slicerColumns[0] || dynamicColumns[0] || 'Category';
+
+    const altGroupCol =
+      slicerColumns.find((c) => c !== groupCol) ||
+      dynamicColumns.find((c) => c !== groupCol && !/^(id|.*_id|po_?id|sr_?no|index)$/i.test(c)) ||
+      groupCol;
+
+    const candidateMetrics = numericMetrics.filter((m) => m !== groupCol);
+    const metricCol =
+      chartMetric && numericMetrics.includes(chartMetric) && chartMetric !== groupCol
+        ? chartMetric
+        : candidateMetrics[0] || numericMetrics[0] || null;
 
     const barMap = {};
+    const barCountMap = {};
     const pieMap = {};
-    if (groupCol) {
-      for (const r of slicedDataset) {
-        const gKey = r[groupCol] !== null && r[groupCol] !== undefined ? String(r[groupCol]) : 'Unknown';
-        const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
-        barMap[gKey] = (barMap[gKey] || 0) + val;
-      }
+
+    for (const r of slicedDataset) {
+      const gKey = formatCategoryLabel(groupCol, r[groupCol]);
+      const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
+      barMap[gKey] = (barMap[gKey] || 0) + val;
+      barCountMap[gKey] = (barCountMap[gKey] || 0) + 1;
+
+      const pKey = formatCategoryLabel(altGroupCol, r[altGroupCol]);
+      pieMap[pKey] = (pieMap[pKey] || 0) + (metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1);
     }
-    if (altGroupCol) {
-      for (const r of slicedDataset) {
-        const pKey = r[altGroupCol] !== null && r[altGroupCol] !== undefined ? String(r[altGroupCol]) : 'Other';
-        const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
-        pieMap[pKey] = (pieMap[pKey] || 0) + val;
-      }
-    }
+
+    const isAvgMeaningful = /age|bp|chol|rate|percent|score|ratio|temp|bmi|sugar|thalach|trestbps/i.test(metricCol || '');
 
     const barData = Object.entries(barMap)
-      .map(([name, value]) => ({ region: name, revenue: Number(value.toFixed(2)) }))
+      .map(([name, totalVal]) => {
+        const count = barCountMap[name] || 1;
+        const displayVal = isAvgMeaningful ? totalVal / count : totalVal;
+        return {
+          region: name,
+          revenue: Number(displayVal.toFixed(1)),
+          count,
+          total: Number(totalVal.toFixed(1))
+        };
+      })
       .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 8);
+      .slice(0, 10);
 
     const pieData = Object.entries(pieMap)
-      .map(([name, value]) => ({ name, value: Number(value.toFixed(2)) }))
+      .map(([name, value]) => ({ name, value: Number(value.toFixed(1)) }))
       .sort((a, b) => b.value - a.value)
-      .slice(0, 6);
+      .slice(0, 8);
 
     return {
       metricCol,
       groupCol,
       altGroupCol,
+      isAverage: isAvgMeaningful,
       barData,
       pieData
     };
@@ -426,7 +450,7 @@ export default function Analytics() {
           </div>
           <h3 className="text-sm font-bold text-[#1E293B]">No Dataset Uploaded Yet</h3>
           <p className="text-xs text-[#64748B] mt-1 max-w-md mx-auto">
-            Upload any CSV or Excel (`.xlsx` / `.xls`) file from your computer to clean numerical nulls (using mean, median, or max), visualize KPIs, and generate a tailored MIS report.
+            Upload any CSV or Excel (.xlsx / .xls) file from your computer to clean numerical nulls (using mean, median, or max), visualize KPIs, and generate a tailored MIS report.
           </p>
           <label className="mt-4 inline-flex items-center gap-2 px-4 py-2.5 bg-[#2563EB] hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-sm transition-colors">
             <Upload className="w-4 h-4" />
@@ -629,7 +653,7 @@ export default function Analytics() {
                 {isStandardSchema
                   ? 'Revenue by Geographic Region'
                   : customProfile?.groupCol
-                    ? `${(customProfile.metricCol || 'Count').replace(/_/g, ' ')} by ${customProfile.groupCol.replace(/_/g, ' ')}`
+                    ? `${customProfile.isAverage ? 'Avg ' : ''}${(customProfile.metricCol || 'Count').replace(/_/g, ' ')} by ${customProfile.groupCol.replace(/_/g, ' ')}`
                     : 'Dataset Breakdown'}
               </h2>
               <p className="text-xs text-[#64748B]">
@@ -656,39 +680,45 @@ export default function Analytics() {
               </span>
             </div>
           </div>
-          <div className="h-60 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={regionChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
-                <XAxis dataKey="region" stroke="#94A3B8" fontSize={12} tickLine={false} />
-                <YAxis
-                  stroke="#94A3B8"
-                  fontSize={12}
-                  tickLine={false}
-                  tickFormatter={(v) =>
-                    isStandardSchema
-                      ? `$${v / 1000}k`
-                      : v >= 1000
-                        ? `${(v / 1000).toFixed(1)}k`
-                        : `${v}`
-                  }
-                />
-                <Tooltip
-                  wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
-                  allowEscapeViewBox={{ x: true, y: true }}
-                  content={renderCartesianTooltip((v) =>
-                    isStandardSchema ? `$${Number(v).toLocaleString()}` : Number(v).toLocaleString()
-                  )}
-                />
-                <Bar
-                  dataKey="revenue"
-                  name={isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Count').replace(/_/g, ' ')}
-                  fill="#2563EB"
-                  radius={[4, 4, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+          {regionChartData.length === 0 ? (
+            <div className="h-60 w-full flex items-center justify-center text-xs text-[#94A3B8]">
+              No breakdown records available for this selection
+            </div>
+          ) : (
+            <div className="h-60 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={regionChartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                  <XAxis dataKey="region" stroke="#94A3B8" fontSize={12} tickLine={false} />
+                  <YAxis
+                    stroke="#94A3B8"
+                    fontSize={12}
+                    tickLine={false}
+                    tickFormatter={(v) =>
+                      isStandardSchema
+                        ? `$${v / 1000}k`
+                        : v >= 1000
+                          ? `${(v / 1000).toFixed(1)}k`
+                          : `${v}`
+                    }
+                  />
+                  <Tooltip
+                    wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
+                    allowEscapeViewBox={{ x: true, y: true }}
+                    content={renderCartesianTooltip((v) =>
+                      isStandardSchema ? `$${Number(v).toLocaleString()}` : Number(v).toLocaleString()
+                    )}
+                  />
+                  <Bar
+                    dataKey="revenue"
+                    name={isStandardSchema ? 'Revenue' : `${customProfile?.isAverage ? 'Avg ' : ''}${(customProfile?.metricCol || 'Count').replace(/_/g, ' ')}`}
+                    fill="#2563EB"
+                    radius={[4, 4, 0, 0]}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
 
         <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm flex flex-col justify-between">
@@ -697,44 +727,50 @@ export default function Analytics() {
               {isStandardSchema
                 ? 'Revenue by Category'
                 : customProfile?.altGroupCol
-                  ? `Share by ${customProfile.altGroupCol}`
+                  ? `Share by ${customProfile.altGroupCol.replace(/_/g, ' ')}`
                   : 'Distribution'}
             </h2>
             <p className="text-xs text-[#64748B] mb-2">
               {isStandardSchema ? 'Mix of Cloud SaaS vs Hardware vs Services' : 'Top segment breakdown'}
             </p>
-            <div className="h-44 w-full flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={categoryChartData}
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={45}
-                    outerRadius={72}
-                    paddingAngle={3}
-                    onMouseEnter={(_, idx) => setHoveredPieIndex(idx)}
-                    onMouseLeave={() => setHoveredPieIndex(null)}
-                  >
-                    {categoryChartData.map((entry, index) => (
-                      <Cell
-                        key={`cell-${index}`}
-                        fill={COLORS[index % COLORS.length]}
-                        opacity={hoveredPieIndex === null || hoveredPieIndex === index ? 1 : 0.45}
-                        style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
-                      />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
-                    allowEscapeViewBox={{ x: true, y: true }}
-                    content={renderPieTooltip}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
+            {categoryChartData.length === 0 ? (
+              <div className="h-44 w-full flex items-center justify-center text-xs text-[#94A3B8]">
+                No segment distribution available
+              </div>
+            ) : (
+              <div className="h-44 w-full flex items-center justify-center">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={categoryChartData}
+                      dataKey="value"
+                      nameKey="name"
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={45}
+                      outerRadius={72}
+                      paddingAngle={3}
+                      onMouseEnter={(_, idx) => setHoveredPieIndex(idx)}
+                      onMouseLeave={() => setHoveredPieIndex(null)}
+                    >
+                      {categoryChartData.map((entry, index) => (
+                        <Cell
+                          key={`cell-${index}`}
+                          fill={COLORS[index % COLORS.length]}
+                          opacity={hoveredPieIndex === null || hoveredPieIndex === index ? 1 : 0.45}
+                          style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
+                        />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
+                      allowEscapeViewBox={{ x: true, y: true }}
+                      content={renderPieTooltip}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            )}
 
             {/* Clean badge outside the Donut chart showing pointed segment name, number & % */}
             <div className="mt-2 mb-3 px-3 py-1.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between gap-2 text-xs min-h-[32px]">

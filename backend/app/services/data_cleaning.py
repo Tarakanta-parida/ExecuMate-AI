@@ -46,7 +46,7 @@ def _choose_numeric_imputation(series: pd.Series, strategy: str = "auto") -> tup
     return fill_val, method
 
 
-def _df_to_clean_records(df: pd.DataFrame, limit: int = 500) -> list[dict]:
+def _df_to_clean_records(df: pd.DataFrame, limit: int = 5000) -> list[dict]:
     """Convert DataFrame rows to JSON-safe Python dicts (None for nulls, strings for dates)."""
     subset = df.head(limit)
     records = []
@@ -75,7 +75,7 @@ def analyze_dataset(file_path: str):
     missing_counts = {str(k): int(v) for k, v in df.isnull().sum().to_dict().items()}
     total_missing_cells = int(df.isnull().sum().sum())
 
-    rows = _df_to_clean_records(df, limit=500)
+    rows = _df_to_clean_records(df, limit=5000)
 
     return {
         "total_rows": total_rows,

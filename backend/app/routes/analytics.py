@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Dataset
+from ..models import Dataset, Report
 from ..schemas import DatasetResponse
 from ..config import settings
 from ..services.data_cleaning import analyze_dataset, clean_and_process_dataset
@@ -49,6 +49,41 @@ async def upload_dataset(file: UploadFile = File(...), db: Session = Depends(get
         columns=analysis["columns"],
         rows=analysis["rows"]
     )
+
+@router.get("/latest", response_model=Optional[DatasetResponse])
+def get_latest_dataset(db: Session = Depends(get_db)):
+    ds = db.query(Dataset).order_by(Dataset.created_at.desc()).first()
+    if not ds or not ds.storage_path or not os.path.exists(ds.storage_path):
+        return None
+    analysis = analyze_dataset(ds.storage_path)
+    return DatasetResponse(
+        id=ds.id,
+        filename=ds.filename,
+        row_count=ds.row_count,
+        column_count=ds.column_count,
+        is_cleaned=ds.is_cleaned,
+        status=ds.status,
+        created_at=ds.created_at,
+        columns=analysis["columns"],
+        rows=analysis["rows"]
+    )
+
+
+@router.delete("/{dataset_id}")
+def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
+    ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    if ds.storage_path and os.path.exists(ds.storage_path):
+        try:
+            os.remove(ds.storage_path)
+        except OSError:
+            pass
+    db.query(Report).filter(Report.dataset_id == dataset_id).update({Report.dataset_id: None})
+    db.delete(ds)
+    db.commit()
+    return {"message": "Dataset deleted successfully", "id": dataset_id}
+
 
 @router.get("/{dataset_id}/preview")
 def preview_dataset(dataset_id: str, db: Session = Depends(get_db)):

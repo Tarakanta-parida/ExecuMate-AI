@@ -98,6 +98,11 @@ export const api = {
       body: formData,
     });
   },
+  getLatestDataset: () => request('/data/latest'),
+  deleteDataset: (datasetId) =>
+    request(`/data/${datasetId}`, {
+      method: 'DELETE',
+    }),
   cleanDataset: (datasetId, strategy = 'auto') =>
     request(`/data/${datasetId}/clean?strategy=${encodeURIComponent(strategy)}`, {
       method: 'POST',

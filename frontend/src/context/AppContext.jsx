@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useMemo, useEffect } from 'react';
+import React, { createContext, useContext, useState, useMemo, useEffect, useRef } from 'react';
 import {
   mockUsers,
   mockDashboardKPIs,
@@ -17,6 +17,11 @@ import {
   buildDatasetDocumentInsight,
   answerDatasetQuestion
 } from '../utils/dataCleaning';
+import {
+  saveActiveDatasetToIDB,
+  loadActiveDatasetFromIDB,
+  clearActiveDatasetFromIDB
+} from '../utils/datasetStorage';
 
 const AppContext = createContext();
 
@@ -31,6 +36,7 @@ const STORAGE_KEYS = {
   datasetId: 'execumate_dataset_id_v2',
   cleaningStats: 'execumate_cleaning_stats_v2',
   isDataCleaned: 'execumate_is_data_cleaned_v2',
+  datasetCleared: 'execumate_dataset_cleared_v2',
   projects: 'execumate_projects_v2',
   tasks: 'execumate_tasks_v2'
 };
@@ -50,6 +56,25 @@ function writeStorage(key, value) {
   } catch {
     // Ignore storage quota errors
   }
+}
+
+function removeStorage(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function writeReportsStorage(reportsList) {
+  const slimmed = Array.isArray(reportsList)
+    ? reportsList.map((r) =>
+        Array.isArray(r.rowsSnapshot) && r.rowsSnapshot.length > 25
+          ? { ...r, rowsSnapshot: r.rowsSnapshot.slice(0, 25) }
+          : r
+      )
+    : [];
+  writeStorage(STORAGE_KEYS.reports, slimmed);
 }
 
 export function AppProvider({ children }) {
@@ -130,9 +155,75 @@ export function AppProvider({ children }) {
   // Projects & Tasks (persisted so file-derived projects & tasks survive refresh)
   const [projects, setProjects] = useState(() => readStorage(STORAGE_KEYS.projects, mockProjects));
   const [tasks, setTasks] = useState(() => readStorage(STORAGE_KEYS.tasks, mockTasks));
+  const hasUserTouchedDatasetRef = useRef(false);
 
   // Sync with FastAPI backend on load
   useEffect(() => {
+    async function hydratePersistedDataset() {
+      try {
+        if (readStorage(STORAGE_KEYS.datasetCleared, false) === true) {
+          return;
+        }
+        const cached = await loadActiveDatasetFromIDB();
+        if (!hasUserTouchedDatasetRef.current && cached && (cached.dataset?.length > 0 || cached.rawDataset?.length > 0)) {
+          const cachedRaw = Array.isArray(cached.rawDataset) && cached.rawDataset.length > 0 ? cached.rawDataset : cached.dataset;
+          const cachedData = Array.isArray(cached.dataset) && cached.dataset.length > 0 ? cached.dataset : cachedRaw;
+          setRawDataset(cachedRaw);
+          setDataset(cachedData);
+          setDatasetName(cached.datasetName || '');
+          setActiveDatasetId(cached.datasetId || null);
+          setIsDataCleaned(Boolean(cached.isDataCleaned));
+          if (cached.imputationStrategy) {
+            setImputationStrategy(cached.imputationStrategy);
+          }
+          if (cached.cleaningStats) {
+            setCleaningStats(cached.cleaningStats);
+          }
+          return;
+        }
+
+        if (!hasUserTouchedDatasetRef.current) {
+          const latest = await api.getLatestDataset();
+          if (!hasUserTouchedDatasetRef.current && latest && Array.isArray(latest.rows) && latest.rows.length > 0) {
+            const strategy = 'auto';
+            const cleaned = cleanDatasetRows(latest.rows, strategy);
+            const nextStats = {
+              duplicatesRemoved: cleaned.duplicatesRemoved,
+              missingValuesImputed: cleaned.missingValuesImputed,
+              initialRows: cleaned.initialRows,
+              currentRows: cleaned.currentRows,
+              cleanQualityScore: cleaned.cleanQualityScore,
+              strategy,
+              imputationDetails: cleaned.imputationDetails
+            };
+            setRawDataset(latest.rows);
+            setDataset(cleaned.cleanedRows);
+            setDatasetName(latest.filename || 'Uploaded Dataset');
+            setActiveDatasetId(latest.id || null);
+            setIsDataCleaned(true);
+            setCleaningStats(nextStats);
+            writeStorage(STORAGE_KEYS.datasetName, latest.filename || 'Uploaded Dataset');
+            writeStorage(STORAGE_KEYS.datasetId, latest.id || null);
+            writeStorage(STORAGE_KEYS.isDataCleaned, true);
+            writeStorage(STORAGE_KEYS.cleaningStats, nextStats);
+            saveActiveDatasetToIDB({
+              rawDataset: latest.rows,
+              dataset: cleaned.cleanedRows,
+              datasetName: latest.filename || 'Uploaded Dataset',
+              datasetId: latest.id || null,
+              isDataCleaned: true,
+              imputationStrategy: strategy,
+              cleaningStats: nextStats
+            });
+          }
+        }
+      } catch {
+        // Keep current dataset state
+      }
+    }
+
+    hydratePersistedDataset();
+
     async function loadBackendData() {
       try {
         const liveProjects = await api.getProjects();
@@ -213,7 +304,7 @@ export function AppProvider({ children }) {
               }),
               ...prev.filter(pr => !deletedIds.has(pr.id) && !formattedReports.some(fr => fr.id === pr.id))
             ];
-            writeStorage(STORAGE_KEYS.reports, merged);
+            writeReportsStorage(merged);
             return merged;
           });
         }
@@ -376,6 +467,7 @@ export function AppProvider({ children }) {
       return;
     }
 
+    hasUserTouchedDatasetRef.current = true;
     const activeStrategy = typeof strategyOverride === 'string' ? strategyOverride : imputationStrategy;
     if (typeof strategyOverride === 'string') {
       setImputationStrategy(strategyOverride);
@@ -395,9 +487,19 @@ export function AppProvider({ children }) {
     setDataset(result.cleanedRows);
     setIsDataCleaned(true);
     setCleaningStats(nextStats);
-    writeStorage(STORAGE_KEYS.dataset, result.cleanedRows);
+    writeStorage(STORAGE_KEYS.datasetCleared, false);
     writeStorage(STORAGE_KEYS.isDataCleaned, true);
     writeStorage(STORAGE_KEYS.cleaningStats, nextStats);
+    removeStorage(STORAGE_KEYS.dataset);
+    saveActiveDatasetToIDB({
+      rawDataset,
+      dataset: result.cleanedRows,
+      datasetName,
+      datasetId: activeDatasetId,
+      isDataCleaned: true,
+      imputationStrategy: activeStrategy,
+      cleaningStats: nextStats
+    });
 
     const summaryText = result.imputationDetails
       .filter((d) => d.isNumeric)
@@ -412,6 +514,7 @@ export function AppProvider({ children }) {
   };
 
   const resetData = () => {
+    hasUserTouchedDatasetRef.current = true;
     const emptyStats = {
       duplicatesRemoved: 0,
       missingValuesImputed: 0,
@@ -424,13 +527,27 @@ export function AppProvider({ children }) {
     setDataset(rawDataset);
     setIsDataCleaned(false);
     setCleaningStats(emptyStats);
-    writeStorage(STORAGE_KEYS.dataset, rawDataset);
+    writeStorage(STORAGE_KEYS.datasetCleared, false);
     writeStorage(STORAGE_KEYS.isDataCleaned, false);
     writeStorage(STORAGE_KEYS.cleaningStats, emptyStats);
+    removeStorage(STORAGE_KEYS.dataset);
+    saveActiveDatasetToIDB({
+      rawDataset,
+      dataset: rawDataset,
+      datasetName,
+      datasetId: activeDatasetId,
+      isDataCleaned: false,
+      imputationStrategy,
+      cleaningStats: emptyStats
+    });
     showToast('Dataset reset to original uploaded raw file.', 'info');
   };
 
   const clearDataset = () => {
+    hasUserTouchedDatasetRef.current = true;
+    const prevDatasetId = activeDatasetId;
+    const prevDatasetName = datasetName;
+
     const emptyStats = {
       duplicatesRemoved: 0,
       missingValuesImputed: 0,
@@ -446,13 +563,40 @@ export function AppProvider({ children }) {
     setActiveDatasetId(null);
     setIsDataCleaned(false);
     setCleaningStats(emptyStats);
-    writeStorage(STORAGE_KEYS.rawDataset, []);
-    writeStorage(STORAGE_KEYS.dataset, []);
-    writeStorage(STORAGE_KEYS.datasetName, '');
-    writeStorage(STORAGE_KEYS.datasetId, null);
-    writeStorage(STORAGE_KEYS.isDataCleaned, false);
-    writeStorage(STORAGE_KEYS.cleaningStats, emptyStats);
-    showToast('Uploaded dataset cleared.', 'info');
+
+    writeStorage(STORAGE_KEYS.datasetCleared, true);
+    removeStorage(STORAGE_KEYS.rawDataset);
+    removeStorage(STORAGE_KEYS.dataset);
+    removeStorage(STORAGE_KEYS.datasetName);
+    removeStorage(STORAGE_KEYS.datasetId);
+    removeStorage(STORAGE_KEYS.isDataCleaned);
+    removeStorage(STORAGE_KEYS.cleaningStats);
+    clearActiveDatasetFromIDB();
+
+    if (prevDatasetName) {
+      const expectedDocId = `dataset-doc-${prevDatasetName}`;
+      setDocuments(prev => {
+        const next = prev.filter(d => d.id !== expectedDocId && !(d.isDatasetDoc && d.title === prevDatasetName));
+        writeStorage(STORAGE_KEYS.documents, next);
+        return next;
+      });
+      setProjects(prev => {
+        const next = prev.filter(p => p.sourceFile !== prevDatasetName);
+        writeStorage(STORAGE_KEYS.projects, next);
+        return next;
+      });
+      setTasks(prev => {
+        const next = prev.filter(t => t.sourceFile !== prevDatasetName);
+        writeStorage(STORAGE_KEYS.tasks, next);
+        return next;
+      });
+    }
+
+    if (prevDatasetId) {
+      api.deleteDataset(prevDatasetId).catch(() => {});
+    }
+
+    showToast('Uploaded dataset deleted.', 'info');
   };
 
   const [isDatasetUploading, setIsDatasetUploading] = useState(false);
@@ -597,7 +741,7 @@ export function AppProvider({ children }) {
 
     setReports(prev => {
       const next = [newRep, ...prev.filter(r => !(r.sourceDataset === targetName && !customReportName))];
-      writeStorage(STORAGE_KEYS.reports, next);
+      writeReportsStorage(next);
       return next;
     });
 
@@ -615,7 +759,7 @@ export function AppProvider({ children }) {
         finalRep = { ...finalRep, id: created.id, size: created.file_size || finalRep.size };
         setReports(prev => {
           const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || r.size } : r));
-          writeStorage(STORAGE_KEYS.reports, updated);
+          writeReportsStorage(updated);
           return updated;
         });
       }
@@ -626,6 +770,7 @@ export function AppProvider({ children }) {
   };
 
   const applyDatasetRows = (rows, fileName, uploadedDatasetId = null) => {
+    hasUserTouchedDatasetRef.current = true;
     const cleaned = cleanDatasetRows(rows, imputationStrategy);
     const nextStats = {
       duplicatesRemoved: cleaned.duplicatesRemoved,
@@ -644,12 +789,22 @@ export function AppProvider({ children }) {
     setIsDataCleaned(true);
     setCleaningStats(nextStats);
 
-    writeStorage(STORAGE_KEYS.rawDataset, rows);
-    writeStorage(STORAGE_KEYS.dataset, cleaned.cleanedRows);
+    writeStorage(STORAGE_KEYS.datasetCleared, false);
+    removeStorage(STORAGE_KEYS.rawDataset);
+    removeStorage(STORAGE_KEYS.dataset);
     writeStorage(STORAGE_KEYS.datasetName, fileName);
     writeStorage(STORAGE_KEYS.datasetId, uploadedDatasetId);
     writeStorage(STORAGE_KEYS.isDataCleaned, true);
     writeStorage(STORAGE_KEYS.cleaningStats, nextStats);
+    saveActiveDatasetToIDB({
+      rawDataset: rows,
+      dataset: cleaned.cleanedRows,
+      datasetName: fileName,
+      datasetId: uploadedDatasetId,
+      isDataCleaned: true,
+      imputationStrategy,
+      cleaningStats: nextStats
+    });
 
     // 1. Sync uploaded CSV/Excel into AI Research Assistant
     const datasetDoc = buildDatasetDocumentInsight(cleaned.cleanedRows, fileName, nextStats);
@@ -698,8 +853,17 @@ export function AppProvider({ children }) {
           api.uploadDataset(file)
             .then((uploaded) => {
               if (uploaded?.id) {
+                if (readStorage(STORAGE_KEYS.datasetCleared, false) === true) {
+                  api.deleteDataset(uploaded.id).catch(() => {});
+                  return;
+                }
                 setActiveDatasetId(uploaded.id);
                 writeStorage(STORAGE_KEYS.datasetId, uploaded.id);
+                loadActiveDatasetFromIDB().then((existing) => {
+                  if (existing && existing.datasetName === file.name) {
+                    saveActiveDatasetToIDB({ ...existing, datasetId: uploaded.id });
+                  }
+                });
               }
             })
             .catch(() => {});
