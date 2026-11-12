@@ -402,3 +402,142 @@ export function answerDatasetQuestion(question, rows, fileName, cleaningStats = 
     citations: [{ page: 1, text: `${fileName} • ${analysis.columns.length} columns` }]
   };
 }
+
+function formatColumnTitle(col) {
+  return String(col).replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+function isMoneyColumn(col) {
+  return /revenue|sales|price|cost|spend|income|salary|budget|profit|amount|value|gmv/i.test(col);
+}
+
+function isPercentColumn(col) {
+  return /margin|pct|percent|rate|ratio|discount/i.test(col) && !/price|cost/i.test(col);
+}
+
+function formatKpiMetricValue(col, num) {
+  if (!Number.isFinite(num)) return '0';
+  const formatted = num.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  if (isPercentColumn(col)) return `${formatted}%`;
+  if (isMoneyColumn(col)) return `$${formatted}`;
+  return formatted;
+}
+
+/**
+ * Build up to 4 pure business KPI cards dynamically from any dataset's rows and numeric columns.
+ */
+export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const metrics = numericColumns.filter((c) => !/^(id|.*_id|sr_?no|index|po_?id)$/i.test(c));
+  const activeMetrics = metrics.length > 0 ? metrics : numericColumns;
+
+  if (activeMetrics.length === 0) {
+    return [
+      { label: 'Total Records', value: safeRows.length.toLocaleString(), tone: 'dark' },
+      { label: 'Columns Analyzed', value: columns.length.toLocaleString(), tone: 'blue' }
+    ];
+  }
+
+  const getVals = (col) =>
+    safeRows.map((r) => r[col]).filter((v) => typeof v === 'number' && Number.isFinite(v));
+  const sumOf = (col) => getVals(col).reduce((a, b) => a + b, 0);
+  const avgOf = (col) => {
+    const vals = getVals(col);
+    return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+  };
+  const maxOf = (col) => {
+    const vals = getVals(col);
+    return vals.length > 0 ? Math.max(...vals) : 0;
+  };
+
+  const revCol = activeMetrics.find((c) => /revenue|sales|total_?amount|amount|spend|income|turnover|gmv/i.test(c));
+  const qtyCol = activeMetrics.find((c) => /quantity|qty|units|volume|count/i.test(c) && !/defect|return|error/i.test(c));
+  const priceCol = activeMetrics.find((c) => /negotiated_?price|unit_?price|price|cost|salary|budget/i.test(c));
+  const marginCol = activeMetrics.find((c) => /margin|profit|discount|pct|percent/i.test(c));
+  const defectCol = activeMetrics.find((c) => /defect|return|error|reject|loss/i.test(c));
+
+  const cards = [];
+
+  // 1. Total Revenue (explicit revenue column or Quantity * Price)
+  if (revCol) {
+    cards.push({
+      label: `Total ${formatColumnTitle(revCol)}`,
+      value: formatKpiMetricValue(revCol, sumOf(revCol)),
+      tone: 'dark'
+    });
+  } else if (qtyCol && priceCol) {
+    const estRevenue = safeRows.reduce((acc, r) => {
+      const q = typeof r[qtyCol] === 'number' ? r[qtyCol] : 0;
+      const p = typeof r[priceCol] === 'number' ? r[priceCol] : 0;
+      return acc + q * p;
+    }, 0);
+    cards.push({
+      label: 'Total Revenue',
+      value: `$${estRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
+      tone: 'dark'
+    });
+  } else {
+    const c0 = activeMetrics[0];
+    cards.push({
+      label: `Total ${formatColumnTitle(c0)}`,
+      value: formatKpiMetricValue(c0, sumOf(c0)),
+      tone: 'dark'
+    });
+  }
+
+  // 2. Avg Quantity (or Avg primary metric)
+  const avgTarget = qtyCol || activeMetrics[0];
+  cards.push({
+    label: `Avg ${formatColumnTitle(avgTarget)}`,
+    value: formatKpiMetricValue(avgTarget, avgOf(avgTarget)),
+    tone: 'blue'
+  });
+
+  // 3. Total Quantity (or secondary metric total / max)
+  if (qtyCol) {
+    cards.push({
+      label: `Total ${formatColumnTitle(qtyCol)}`,
+      value: formatKpiMetricValue(qtyCol, sumOf(qtyCol)),
+      tone: 'emerald'
+    });
+  } else if (activeMetrics[1]) {
+    const c1 = activeMetrics[1];
+    cards.push({
+      label: `Total ${formatColumnTitle(c1)}`,
+      value: formatKpiMetricValue(c1, sumOf(c1)),
+      tone: 'emerald'
+    });
+  } else {
+    const c0 = activeMetrics[0];
+    cards.push({
+      label: `Max ${formatColumnTitle(c0)}`,
+      value: formatKpiMetricValue(c0, maxOf(c0)),
+      tone: 'emerald'
+    });
+  }
+
+  // 4. Fourth KPI: Margin / Avg Price / Defect / Next numeric column
+  const used = new Set([revCol, qtyCol].filter(Boolean));
+  const fourthCol =
+    (marginCol && !used.has(marginCol) && marginCol) ||
+    (priceCol && !used.has(priceCol) && priceCol) ||
+    (defectCol && !used.has(defectCol) && defectCol) ||
+    activeMetrics.find((c) => !used.has(c)) ||
+    activeMetrics[0];
+
+  if (fourthCol === defectCol) {
+    cards.push({
+      label: `Total ${formatColumnTitle(fourthCol)}`,
+      value: formatKpiMetricValue(fourthCol, sumOf(fourthCol)),
+      tone: 'amber'
+    });
+  } else {
+    cards.push({
+      label: `Avg ${formatColumnTitle(fourthCol)}`,
+      value: formatKpiMetricValue(fourthCol, avgOf(fourthCol)),
+      tone: 'emerald'
+    });
+  }
+
+  return cards;
+}

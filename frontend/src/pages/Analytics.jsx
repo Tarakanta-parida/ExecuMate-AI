@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Upload,
   FileSpreadsheet,
@@ -30,6 +30,7 @@ import {
   Legend
 } from 'recharts';
 import { useApp } from '../context/AppContext';
+import { buildDatasetKpiCards } from '../utils/dataCleaning';
 
 export default function Analytics() {
   const {
@@ -53,6 +54,9 @@ export default function Analytics() {
   const [selectedRegion, setSelectedRegion] = useState('All');
   const [sortField, setSortField] = useState('revenue');
   const [sortDirection, setSortDirection] = useState('desc');
+  const [slicerColumn, setSlicerColumn] = useState('');
+  const [slicerValue, setSlicerValue] = useState('All');
+  const [chartMetric, setChartMetric] = useState('');
 
   const isStandardSchema = useMemo(() => {
     if (!dataset || dataset.length === 0) return true;
@@ -65,40 +69,71 @@ export default function Analytics() {
     return Object.keys(dataset[0]);
   }, [dataset]);
 
-  const customProfile = useMemo(() => {
-    if (isStandardSchema || !dataset || dataset.length === 0) return null;
+  const numericMetrics = useMemo(() => {
     const numCols = datasetAnalysis.numericColumns || [];
-    const nonIdNumCols = numCols.filter((c) => !/^(id|.*_id|sr_?no|index)$/i.test(c));
-    const metricCol = nonIdNumCols[0] || numCols[0] || null;
+    const nonId = numCols.filter((c) => !/^(id|.*_id|sr_?no|index|po_?id)$/i.test(c));
+    return nonId.length > 0 ? nonId : numCols;
+  }, [datasetAnalysis.numericColumns]);
 
-    const textCols = dynamicColumns.filter((c) => !numCols.includes(c));
-    const nonDateTextCols = textCols.filter((c) => !/date|time|id/i.test(c));
-    const groupCol = nonDateTextCols[0] || textCols[0] || null;
-    const altGroupCol = nonDateTextCols[1] || groupCol;
+  const slicerColumns = useMemo(() => {
+    const numSet = new Set(datasetAnalysis.numericColumns || []);
+    const categorical = dynamicColumns.filter(
+      (c) => !numSet.has(c) && !/^(id|.*_id|po_?id|sr_?no|index)$/i.test(c) && !/date|time/i.test(c)
+    );
+    if (categorical.length > 0) return categorical;
+    return dynamicColumns.filter((c) => !numSet.has(c));
+  }, [dynamicColumns, datasetAnalysis.numericColumns]);
 
-    let metricSum = 0;
-    let metricCount = 0;
-    if (metricCol) {
-      for (const r of dataset) {
-        if (typeof r[metricCol] === 'number' && Number.isFinite(r[metricCol])) {
-          metricSum += r[metricCol];
-          metricCount++;
-        }
-      }
+  // Reset slicer & chart metric when a new dataset is loaded
+  useEffect(() => {
+    setSlicerColumn(slicerColumns[0] || '');
+    setSlicerValue('All');
+    setChartMetric(numericMetrics[0] || '');
+  }, [datasetName, slicerColumns.join('|'), numericMetrics.join('|')]);
+
+  const slicerOptions = useMemo(() => {
+    if (!slicerColumn || !dataset || dataset.length === 0) return [];
+    const counts = {};
+    for (const r of dataset) {
+      const val = r[slicerColumn] !== null && r[slicerColumn] !== undefined ? String(r[slicerColumn]) : 'Unknown';
+      counts[val] = (counts[val] || 0) + 1;
     }
-    const metricAvg = metricCount > 0 ? metricSum / metricCount : 0;
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([value, count]) => ({ value, count }));
+  }, [dataset, slicerColumn]);
+
+  const slicedDataset = useMemo(() => {
+    if (!slicerColumn || slicerValue === 'All') return dataset;
+    return dataset.filter((r) => {
+      const val = r[slicerColumn] !== null && r[slicerColumn] !== undefined ? String(r[slicerColumn]) : 'Unknown';
+      return val === slicerValue;
+    });
+  }, [dataset, slicerColumn, slicerValue]);
+
+  const dynamicKpiCards = useMemo(() => {
+    return buildDatasetKpiCards(slicedDataset, dynamicColumns, datasetAnalysis.numericColumns);
+  }, [slicedDataset, dynamicColumns, datasetAnalysis.numericColumns]);
+
+  const customProfile = useMemo(() => {
+    if (isStandardSchema || !slicedDataset || slicedDataset.length === 0) return null;
+    const metricCol = (chartMetric && numericMetrics.includes(chartMetric)) ? chartMetric : numericMetrics[0] || null;
+
+    const textCols = slicerColumns.length > 0 ? slicerColumns : dynamicColumns.filter((c) => !numericMetrics.includes(c));
+    const groupCol = slicerColumn && textCols.includes(slicerColumn) ? slicerColumn : textCols[0] || null;
+    const altGroupCol = textCols.find((c) => c !== groupCol) || groupCol;
 
     const barMap = {};
     const pieMap = {};
     if (groupCol) {
-      for (const r of dataset) {
+      for (const r of slicedDataset) {
         const gKey = r[groupCol] !== null && r[groupCol] !== undefined ? String(r[groupCol]) : 'Unknown';
         const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
         barMap[gKey] = (barMap[gKey] || 0) + val;
       }
     }
     if (altGroupCol) {
-      for (const r of dataset) {
+      for (const r of slicedDataset) {
         const pKey = r[altGroupCol] !== null && r[altGroupCol] !== undefined ? String(r[altGroupCol]) : 'Other';
         const val = metricCol && typeof r[metricCol] === 'number' ? r[metricCol] : 1;
         pieMap[pKey] = (pieMap[pKey] || 0) + val;
@@ -119,72 +154,39 @@ export default function Analytics() {
       metricCol,
       groupCol,
       altGroupCol,
-      metricSum,
-      metricAvg,
       barData,
       pieData
     };
-  }, [isStandardSchema, dataset, datasetAnalysis, dynamicColumns]);
+  }, [isStandardSchema, slicedDataset, numericMetrics, slicerColumns, dynamicColumns, slicerColumn, chartMetric]);
 
-  // Computed KPIs from the current dataset
-  const kpis = useMemo(() => {
-    let totalRev = 0;
-    let totalCost = 0;
-    let totalUnits = 0;
-    let enterpriseRev = 0;
-    let validMarginCount = 0;
-    let totalMarginSum = 0;
-
-    for (const r of dataset) {
-      if (typeof r.revenue === 'number') totalRev += r.revenue;
-      if (typeof r.cost === 'number') totalCost += r.cost;
-      if (typeof r.units === 'number') totalUnits += r.units;
-      if (r.clientTier === 'Enterprise' && typeof r.revenue === 'number') enterpriseRev += r.revenue;
-      if (typeof r.margin === 'number') {
-        totalMarginSum += r.margin;
-        validMarginCount++;
-      }
-    }
-
-    const avgMargin = validMarginCount > 0 ? (totalMarginSum / validMarginCount).toFixed(1) : 0;
-    const enterprisePct = totalRev > 0 ? ((enterpriseRev / totalRev) * 100).toFixed(1) : 0;
-
-    return {
-      totalRev: `$${(totalRev / 1000).toFixed(1)}k`,
-      avgMargin: `${avgMargin}%`,
-      totalUnits: totalUnits.toLocaleString(),
-      enterprisePct: `${enterprisePct}%`
-    };
-  }, [dataset]);
-
-  // Chart aggregates by Region
+  // Chart aggregates by Region (respects active slicer)
   const regionChartData = useMemo(() => {
     if (!isStandardSchema && customProfile) {
       return customProfile.barData;
     }
     const map = {};
-    for (const r of dataset) {
+    for (const r of slicedDataset) {
       const reg = r.region || 'Unknown';
       if (!map[reg]) map[reg] = { region: reg, revenue: 0, units: 0 };
       if (typeof r.revenue === 'number') map[reg].revenue += r.revenue;
       if (typeof r.units === 'number') map[reg].units += r.units;
     }
     return Object.values(map);
-  }, [dataset, isStandardSchema, customProfile]);
+  }, [slicedDataset, isStandardSchema, customProfile]);
 
-  // Chart aggregates by Category
+  // Chart aggregates by Category (respects active slicer)
   const categoryChartData = useMemo(() => {
     if (!isStandardSchema && customProfile) {
       return customProfile.pieData;
     }
     const map = {};
-    for (const r of dataset) {
+    for (const r of slicedDataset) {
       const cat = r.category || 'Other';
       if (!map[cat]) map[cat] = { name: cat, value: 0 };
       if (typeof r.revenue === 'number') map[cat].value += r.revenue;
     }
     return Object.values(map);
-  }, [dataset, isStandardSchema, customProfile]);
+  }, [slicedDataset, isStandardSchema, customProfile]);
 
   const COLORS = ['#2563EB', '#16A34A', '#D97706', '#9333EA', '#0EA5E9', '#EC4899'];
 
@@ -196,9 +198,9 @@ export default function Analytics() {
     return Array.from(regs);
   }, [dataset]);
 
-  // Filter & sort dataset for the preview table
+  // Filter & sort dataset for the preview table (respects active slicer)
   const filteredData = useMemo(() => {
-    return dataset
+    return slicedDataset
       .filter((row) => {
         const matchesRegion = !isStandardSchema || selectedRegion === 'All' || row.region === selectedRegion;
         const matchesSearch =
@@ -220,7 +222,7 @@ export default function Analytics() {
           ? String(valA).localeCompare(String(valB))
           : String(valB).localeCompare(String(valA));
       });
-  }, [dataset, isStandardSchema, searchTerm, selectedRegion, sortField, sortDirection]);
+  }, [slicedDataset, isStandardSchema, searchTerm, selectedRegion, sortField, sortDirection]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -420,81 +422,145 @@ export default function Analytics() {
           </div>
         )}
 
-        {/* Dynamic KPI Bar */}
-        {isStandardSchema ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Revenue</span>
-              <div className="text-lg font-bold text-[#1E293B] mt-0.5">{kpis.totalRev}</div>
-            </div>
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Avg Gross Margin</span>
-              <div className="text-lg font-bold text-emerald-600 mt-0.5">{kpis.avgMargin}</div>
-            </div>
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Units Sold</span>
-              <div className="text-lg font-bold text-[#1E293B] mt-0.5">{kpis.totalUnits}</div>
-            </div>
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Enterprise Share</span>
-              <div className="text-lg font-bold text-[#2563EB] mt-0.5">{kpis.enterprisePct}</div>
-            </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Total Records</span>
-              <div className="text-lg font-bold text-[#1E293B] mt-0.5">{dataset.length.toLocaleString()}</div>
-            </div>
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase">Numeric Columns</span>
-              <div className="text-lg font-bold text-emerald-600 mt-0.5">{datasetAnalysis.numericColumns.length}</div>
-            </div>
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
-                {customProfile?.metricCol ? `Total ${customProfile.metricCol}` : 'Total Columns'}
-              </span>
-              <div className="text-lg font-bold text-[#1E293B] mt-0.5">
-                {customProfile?.metricCol
-                  ? customProfile.metricSum.toLocaleString(undefined, { maximumFractionDigits: 1 })
-                  : dynamicColumns.length}
+        {/* Interactive Slicer */}
+        {slicerColumns.length > 0 && (
+          <div className="mt-4 p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="font-bold text-[#1E293B] uppercase tracking-wider text-[11px] flex items-center gap-1">
+                  <Filter className="w-3.5 h-3.5 text-[#2563EB]" /> Slicer
+                </span>
+                <select
+                  value={slicerColumn}
+                  onChange={(e) => {
+                    setSlicerColumn(e.target.value);
+                    setSlicerValue('All');
+                  }}
+                  aria-label="Slicer column"
+                  className="bg-white border border-[#CBD5E1] rounded-md px-2 py-1 text-xs font-semibold text-[#1E293B] focus:outline-none focus:ring-1 focus:ring-blue-500"
+                >
+                  {slicerColumns.map((col) => (
+                    <option key={col} value={col}>{col.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+                <select
+                  value={slicerValue}
+                  onChange={(e) => setSlicerValue(e.target.value)}
+                  aria-label="Slicer value"
+                  className="bg-white border border-[#CBD5E1] rounded-md px-2 py-1 text-xs font-medium text-[#1E293B] focus:outline-none focus:ring-1 focus:ring-blue-500 max-w-[200px]"
+                >
+                  <option value="All">All ({dataset.length})</option>
+                  {slicerOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.value} ({opt.count})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px] text-[#64748B]">
+                <span>
+                  Showing <strong className="text-[#1E293B]">{slicedDataset.length}</strong> of {dataset.length} rows
+                </span>
+                {slicerValue !== 'All' && (
+                  <button
+                    onClick={() => setSlicerValue('All')}
+                    className="text-[#2563EB] hover:underline font-semibold"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
             </div>
-            <div className="p-3 bg-[#F8FAFC] rounded-lg">
-              <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
-                {customProfile?.metricCol ? `Avg ${customProfile.metricCol}` : 'Data Completeness'}
-              </span>
-              <div className="text-lg font-bold text-[#2563EB] mt-0.5">
-                {customProfile?.metricCol
-                  ? customProfile.metricAvg.toLocaleString(undefined, { maximumFractionDigits: 1 })
-                  : `${isDataCleaned ? 100 : datasetAnalysis.qualityScore}%`}
-              </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                onClick={() => setSlicerValue('All')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors ${
+                  slicerValue === 'All'
+                    ? 'bg-[#2563EB] text-white shadow-2xs'
+                    : 'bg-white border border-[#E2E8F0] text-[#475569] hover:border-blue-300'
+                }`}
+              >
+                All
+              </button>
+              {slicerOptions.slice(0, 8).map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSlicerValue(slicerValue === opt.value ? 'All' : opt.value)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    slicerValue === opt.value
+                      ? 'bg-[#2563EB] text-white shadow-2xs'
+                      : 'bg-white border border-[#E2E8F0] text-[#475569] hover:border-blue-300'
+                  }`}
+                >
+                  {opt.value} <span className="opacity-70">({opt.count})</span>
+                </button>
+              ))}
             </div>
           </div>
         )}
+
+        {/* Dynamic KPI Bar (Pure KPIs reacting to Slicer) */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
+          {dynamicKpiCards.map((kpi, idx) => {
+            const valueColor =
+              kpi.tone === 'emerald'
+                ? 'text-emerald-600'
+                : kpi.tone === 'blue'
+                  ? 'text-[#2563EB]'
+                  : kpi.tone === 'amber'
+                    ? 'text-amber-600'
+                    : 'text-[#1E293B]';
+            return (
+              <div key={idx} className="p-3 bg-[#F8FAFC] rounded-lg">
+                <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
+                  {kpi.label}
+                </span>
+                <div className={`text-lg font-bold mt-0.5 ${valueColor}`}>
+                  {kpi.value}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Visual Analytics Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <div>
               <h2 className="text-sm font-bold text-[#1E293B]">
                 {isStandardSchema
                   ? 'Revenue by Geographic Region'
                   : customProfile?.groupCol
-                    ? `${customProfile.metricCol || 'Count'} by ${customProfile.groupCol}`
+                    ? `${(customProfile.metricCol || 'Count').replace(/_/g, ' ')} by ${customProfile.groupCol.replace(/_/g, ' ')}`
                     : 'Dataset Breakdown'}
               </h2>
               <p className="text-xs text-[#64748B]">
                 {isStandardSchema
                   ? 'Consolidated gross revenue breakdown ($USD)'
-                  : `Aggregated from uploaded file (${datasetName})`}
+                  : `Aggregated from ${datasetName}${slicerValue !== 'All' ? ` • ${slicerColumn}: ${slicerValue}` : ''}`}
               </p>
             </div>
-            <span className="text-xs font-semibold text-[#2563EB] bg-blue-50 px-2 py-1 rounded">
-              Aggregated
-            </span>
+            <div className="flex items-center gap-2">
+              {!isStandardSchema && numericMetrics.length > 1 && (
+                <select
+                  value={chartMetric}
+                  onChange={(e) => setChartMetric(e.target.value)}
+                  aria-label="Chart metric"
+                  className="text-xs bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-2 py-1 text-[#1E293B] font-semibold focus:outline-none"
+                >
+                  {numericMetrics.map((m) => (
+                    <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>
+                  ))}
+                </select>
+              )}
+              <span className="text-xs font-semibold text-[#2563EB] bg-blue-50 px-2 py-1 rounded">
+                Aggregated
+              </span>
+            </div>
           </div>
           <div className="h-60 w-full">
             <ResponsiveContainer width="100%" height="100%">
