@@ -1,16 +1,58 @@
 import pandas as pd
 import numpy as np
 
-def analyze_dataset(file_path: str):
+NA_MARKERS = ["NULL", "null", "None", "none", "N/A", "NA", "NaN", "nan", ""]
+
+
+def _load_dataframe(file_path: str) -> pd.DataFrame:
     if file_path.endswith('.csv'):
-        df = pd.read_csv(file_path)
+        return pd.read_csv(file_path, na_values=NA_MARKERS)
+    return pd.read_excel(file_path, na_values=NA_MARKERS)
+
+
+def _choose_numeric_imputation(series: pd.Series, strategy: str = "auto") -> tuple[float, str]:
+    """Compute replacement value for numerical nulls using mean, median, max, or dataset-adaptive auto."""
+    valid = series.dropna()
+    if valid.empty:
+        return 0, "zero"
+
+    strategy_norm = (strategy or "auto").lower()
+    if strategy_norm not in {"auto", "mean", "median", "max"}:
+        strategy_norm = "auto"
+
+    if strategy_norm == "auto":
+        # Choose median when distribution is skewed or has outliers; otherwise mean
+        has_outliers = False
+        if len(valid) >= 4:
+            q1 = float(valid.quantile(0.25))
+            q3 = float(valid.quantile(0.75))
+            iqr = q3 - q1
+            if iqr > 0:
+                has_outliers = bool(((valid < (q1 - 1.5 * iqr)) | (valid > (q3 + 1.5 * iqr))).any())
+        skew = abs(float(valid.skew())) if len(valid) >= 3 else 0.0
+        method = "median" if (has_outliers or skew >= 0.5) else "mean"
     else:
-        df = pd.read_excel(file_path)
+        method = strategy_norm
+
+    if method == "mean":
+        raw_val = float(valid.mean())
+    elif method == "max":
+        raw_val = float(valid.max())
+    else:
+        raw_val = float(valid.median())
+
+    is_all_int = bool((valid % 1 == 0).all())
+    fill_val = int(round(raw_val)) if is_all_int else round(raw_val, 2)
+    return fill_val, method
+
+
+def analyze_dataset(file_path: str):
+    df = _load_dataframe(file_path)
 
     total_rows = len(df)
     total_cols = len(df.columns)
     duplicate_count = int(df.duplicated().sum())
-    missing_counts = df.isnull().sum().to_dict()
+    missing_counts = {str(k): int(v) for k, v in df.isnull().sum().to_dict().items()}
     total_missing_cells = int(df.isnull().sum().sum())
 
     # Preview top 10 rows
@@ -26,27 +68,40 @@ def analyze_dataset(file_path: str):
         "preview": preview
     }
 
-def clean_and_process_dataset(file_path: str, output_path: str = None):
-    if file_path.endswith('.csv'):
-        df = pd.read_csv(file_path)
-    else:
-        df = pd.read_excel(file_path)
+
+def clean_and_process_dataset(file_path: str, output_path: str = None, strategy: str = "auto"):
+    df = _load_dataframe(file_path)
 
     initial_rows = len(df)
     duplicates_detected = int(df.duplicated().sum())
-    
+
     # 1. Deduplicate
     df = df.drop_duplicates()
 
     # 2. Impute / Clean nulls
     missing_imputed = 0
+    imputation_details = []
     for col in df.columns:
-        if df[col].isnull().sum() > 0:
-            missing_imputed += int(df[col].isnull().sum())
+        null_count = int(df[col].isnull().sum())
+        if null_count > 0:
+            missing_imputed += null_count
             if pd.api.types.is_numeric_dtype(df[col]):
-                df[col] = df[col].fillna(df[col].median())
+                fill_val, used_method = _choose_numeric_imputation(df[col], strategy=strategy)
+                df[col] = df[col].fillna(fill_val)
+                imputation_details.append({
+                    "column": str(col),
+                    "method": used_method,
+                    "value": fill_val,
+                    "nulls_replaced": null_count
+                })
             else:
                 df[col] = df[col].fillna("Unknown")
+                imputation_details.append({
+                    "column": str(col),
+                    "method": "default_text",
+                    "value": "Unknown",
+                    "nulls_replaced": null_count
+                })
 
     # 3. Standardize string whitespace
     for col in df.select_dtypes(include="object").columns:
@@ -81,6 +136,8 @@ def clean_and_process_dataset(file_path: str, output_path: str = None):
         "cleaned_rows": len(df),
         "duplicates_removed": duplicates_detected,
         "missing_cells_imputed": missing_imputed,
+        "strategy": strategy,
+        "imputation_details": imputation_details,
         "kpis": kpis,
         "columns": list(df.columns),
         "preview": cleaned_preview

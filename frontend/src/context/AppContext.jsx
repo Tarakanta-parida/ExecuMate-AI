@@ -14,6 +14,11 @@ import {
   mockGeneratedReports
 } from '../mockData';
 import { api } from '../services/api';
+import {
+  analyzeDatasetRows,
+  cleanDatasetRows,
+  parseCsvText
+} from '../utils/dataCleaning';
 
 const AppContext = createContext();
 
@@ -248,62 +253,91 @@ export function AppProvider({ children }) {
   };
 
   // Data Analytics & MIS Module
+  const [rawDataset, setRawDataset] = useState(initialSampleDataset);
   const [dataset, setDataset] = useState(initialSampleDataset);
+  const [datasetName, setDatasetName] = useState('regional_sales_q4_uncleaned.csv');
+  const [imputationStrategy, setImputationStrategy] = useState('auto');
   const [isDataCleaned, setIsDataCleaned] = useState(false);
+
+  const datasetAnalysis = useMemo(() => analyzeDatasetRows(dataset), [dataset]);
+
   const [cleaningStats, setCleaningStats] = useState({
-    duplicatesRemoved: 1,
-    missingValuesImputed: 3,
-    initialRows: 15,
-    currentRows: 14,
-    cleanQualityScore: 99.4
+    duplicatesRemoved: 0,
+    missingValuesImputed: 0,
+    initialRows: initialSampleDataset.length,
+    currentRows: initialSampleDataset.length,
+    cleanQualityScore: 100,
+    strategy: 'auto',
+    imputationDetails: []
   });
 
-  const cleanData = () => {
-    const seen = new Set();
-    const cleaned = [];
-    let dups = 0;
-    let missingImputed = 0;
-
-    for (const row of dataset) {
-      const key = `${row.region}-${row.category}-${row.revenue}-${row.date}`;
-      if (seen.has(key)) {
-        dups++;
-        continue;
-      }
-      seen.add(key);
-
-      const cleanedRow = { ...row };
-      if (cleanedRow.units === null || cleanedRow.units === undefined) {
-        cleanedRow.units = 45;
-        missingImputed++;
-      }
-      if (cleanedRow.cost === null || cleanedRow.cost === undefined) {
-        cleanedRow.cost = Math.round(cleanedRow.revenue * 0.45);
-        missingImputed++;
-      }
-      if (cleanedRow.margin === null || cleanedRow.margin === undefined) {
-        cleanedRow.margin = Number((((cleanedRow.revenue - cleanedRow.cost) / cleanedRow.revenue) * 100).toFixed(1));
-        missingImputed++;
-      }
-      cleaned.push(cleanedRow);
+  const cleanData = (strategyOverride) => {
+    const activeStrategy = typeof strategyOverride === 'string' ? strategyOverride : imputationStrategy;
+    if (typeof strategyOverride === 'string') {
+      setImputationStrategy(strategyOverride);
     }
 
-    setDataset(cleaned);
+    const result = cleanDatasetRows(rawDataset, activeStrategy);
+    setDataset(result.cleanedRows);
     setIsDataCleaned(true);
     setCleaningStats({
-      duplicatesRemoved: dups || 1,
-      missingValuesImputed: missingImputed || 3,
-      initialRows: 15,
-      currentRows: cleaned.length,
-      cleanQualityScore: 99.8
+      duplicatesRemoved: result.duplicatesRemoved,
+      missingValuesImputed: result.missingValuesImputed,
+      initialRows: result.initialRows,
+      currentRows: result.currentRows,
+      cleanQualityScore: result.cleanQualityScore,
+      strategy: activeStrategy,
+      imputationDetails: result.imputationDetails
     });
-    showToast("Data cleaned successfully! Duplicates removed and missing values imputed.");
+
+    const summaryText = result.imputationDetails
+      .filter((d) => d.isNumeric)
+      .map((d) => `${d.column} -> ${d.value} (${d.method})`)
+      .join(', ');
+
+    showToast(
+      summaryText
+        ? `Data cleaned! Replaced ${result.missingValuesImputed} nulls (${summaryText}).`
+        : 'Data cleaned successfully! Duplicates removed and missing values imputed.'
+    );
   };
 
   const resetData = () => {
-    setDataset(initialSampleDataset);
+    setDataset(rawDataset);
     setIsDataCleaned(false);
-    showToast("Dataset reset to original raw file.", "info");
+    setCleaningStats((prev) => ({
+      ...prev,
+      duplicatesRemoved: 0,
+      missingValuesImputed: 0,
+      imputationDetails: []
+    }));
+    showToast('Dataset reset to original raw file.', 'info');
+  };
+
+  const loadUploadedDataset = async (file) => {
+    if (!file) return;
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      const text = await file.text();
+      const { rows } = parseCsvText(text);
+      if (rows.length > 0) {
+        setRawDataset(rows);
+        setDataset(rows);
+        setDatasetName(file.name);
+        setIsDataCleaned(false);
+        setCleaningStats({
+          duplicatesRemoved: 0,
+          missingValuesImputed: 0,
+          initialRows: rows.length,
+          currentRows: rows.length,
+          cleanQualityScore: 100,
+          strategy: imputationStrategy,
+          imputationDetails: []
+        });
+        showToast(`Uploaded dataset "${file.name}" with ${rows.length} rows previewed.`, 'success');
+        return;
+      }
+    }
+    showToast(`Uploaded dataset "${file.name}" with ${dataset.length} rows previewed.`, 'success');
   };
 
   // AI Research Assistant Module
@@ -502,10 +536,15 @@ export function AppProvider({ children }) {
         addTask,
         updateTaskStatus,
         dataset,
+        datasetName,
+        datasetAnalysis,
+        imputationStrategy,
+        setImputationStrategy,
         isDataCleaned,
         cleaningStats,
         cleanData,
         resetData,
+        loadUploadedDataset,
         documents,
         deleteDocument,
         selectedDocId,

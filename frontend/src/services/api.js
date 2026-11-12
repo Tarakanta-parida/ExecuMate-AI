@@ -83,8 +83,8 @@ export const api = {
     }),
 
   // Data Analytics
-  cleanDataset: (datasetId) =>
-    request(`/data/${datasetId}/clean`, {
+  cleanDataset: (datasetId, strategy = 'auto') =>
+    request(`/data/${datasetId}/clean?strategy=${encodeURIComponent(strategy)}`, {
       method: 'POST',
     }),
   previewDataset: (datasetId) => request(`/data/${datasetId}/preview`),

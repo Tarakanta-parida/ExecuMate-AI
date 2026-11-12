@@ -1,6 +1,8 @@
 import os
 import shutil
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from pydantic import BaseModel
+from typing import Optional
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Dataset
@@ -41,14 +43,24 @@ def preview_dataset(dataset_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Dataset not found")
     return analyze_dataset(ds.storage_path)
 
+class CleanDatasetRequest(BaseModel):
+    strategy: Optional[str] = "auto"
+
+
 @router.post("/{dataset_id}/clean")
-def clean_dataset(dataset_id: str, db: Session = Depends(get_db)):
+def clean_dataset(
+    dataset_id: str,
+    strategy: str = Query("auto", description="Imputation strategy: auto, mean, median, or max"),
+    body: Optional[CleanDatasetRequest] = None,
+    db: Session = Depends(get_db),
+):
     ds = db.query(Dataset).filter(Dataset.id == dataset_id).first()
     if not ds:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
+    chosen_strategy = (body.strategy if body and body.strategy else strategy) or "auto"
     cleaned_path = ds.storage_path.replace(".csv", "_cleaned.csv").replace(".xlsx", "_cleaned.xlsx")
-    result = clean_and_process_dataset(ds.storage_path, output_path=cleaned_path)
+    result = clean_and_process_dataset(ds.storage_path, output_path=cleaned_path, strategy=chosen_strategy)
 
     ds.is_cleaned = True
     ds.storage_path = cleaned_path

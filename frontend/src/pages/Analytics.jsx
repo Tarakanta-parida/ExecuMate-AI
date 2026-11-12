@@ -33,12 +33,16 @@ import { useApp } from '../context/AppContext';
 export default function Analytics() {
   const {
     dataset,
+    datasetName,
+    datasetAnalysis,
+    imputationStrategy,
+    setImputationStrategy,
     isDataCleaned,
     cleaningStats,
     cleanData,
     resetData,
-    generateReportFromData,
-    showToast
+    loadUploadedDataset,
+    generateReportFromData
   } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -102,17 +106,35 @@ export default function Analytics() {
 
   const COLORS = ['#2563EB', '#16A34A', '#D97706', '#9333EA'];
 
+  const availableRegions = useMemo(() => {
+    const regs = new Set();
+    for (const r of dataset) {
+      if (r.region) regs.add(r.region);
+    }
+    return Array.from(regs);
+  }, [dataset]);
+
+  const isStandardSchema = useMemo(() => {
+    if (!dataset || dataset.length === 0) return true;
+    const cols = Object.keys(dataset[0]);
+    return ['id', 'date', 'region', 'category', 'units', 'revenue', 'margin'].every((k) => cols.includes(k));
+  }, [dataset]);
+
+  const dynamicColumns = useMemo(() => {
+    if (!dataset || dataset.length === 0) return [];
+    return Object.keys(dataset[0]);
+  }, [dataset]);
+
   // Filter & sort dataset for the preview table
   const filteredData = useMemo(() => {
     return dataset
       .filter((row) => {
-        const matchesRegion = selectedRegion === 'All' || row.region === selectedRegion;
+        const matchesRegion = !isStandardSchema || selectedRegion === 'All' || row.region === selectedRegion;
         const matchesSearch =
           searchTerm === '' ||
-          row.region?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          row.category?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          row.clientTier?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          row.status?.toLowerCase().includes(searchTerm.toLowerCase());
+          Object.values(row).some((v) =>
+            v !== null && v !== undefined && String(v).toLowerCase().includes(searchTerm.toLowerCase())
+          );
         return matchesRegion && matchesSearch;
       })
       .sort((a, b) => {
@@ -120,14 +142,14 @@ export default function Analytics() {
         const valB = b[sortField];
         if (valA === null || valA === undefined) return 1;
         if (valB === null || valB === undefined) return -1;
-        if (typeof valA === 'number') {
+        if (typeof valA === 'number' && typeof valB === 'number') {
           return sortDirection === 'asc' ? valA - valB : valB - valA;
         }
         return sortDirection === 'asc'
           ? String(valA).localeCompare(String(valB))
           : String(valB).localeCompare(String(valA));
       });
-  }, [dataset, searchTerm, selectedRegion, sortField, sortDirection]);
+  }, [dataset, isStandardSchema, searchTerm, selectedRegion, sortField, sortDirection]);
 
   const handleSort = (field) => {
     if (sortField === field) {
@@ -138,10 +160,11 @@ export default function Analytics() {
     }
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      showToast(`Uploaded dataset "${file.name}" with 15 rows previewed.`, 'success');
+      await loadUploadedDataset(file);
+      e.target.value = '';
     }
   };
 
@@ -167,8 +190,27 @@ export default function Analytics() {
             <input type="file" accept=".csv, .xlsx, .xls" className="hidden" onChange={handleFileUpload} />
           </label>
 
+          <select
+            value={imputationStrategy}
+            onChange={(e) => {
+              const nextStrategy = e.target.value;
+              setImputationStrategy(nextStrategy);
+              if (isDataCleaned) {
+                cleanData(nextStrategy);
+              }
+            }}
+            aria-label="Numerical null imputation method"
+            title="Choose how numerical NULL values are replaced"
+            className="px-3 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold shadow-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="auto">Nulls: Auto (By Dataset)</option>
+            <option value="mean">Nulls: Mean</option>
+            <option value="median">Nulls: Median</option>
+            <option value="max">Nulls: Max</option>
+          </select>
+
           <button
-            onClick={cleanData}
+            onClick={() => cleanData()}
             disabled={isDataCleaned}
             className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-white shadow-sm transition-all ${
               isDataCleaned
@@ -216,7 +258,7 @@ export default function Analytics() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold text-sm text-[#1E293B]">regional_sales_q4_uncleaned.csv</span>
+                <span className="font-bold text-sm text-[#1E293B]">{datasetName}</span>
                 {isDataCleaned ? (
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-100 text-emerald-800">
                     CLEANSED & AUDITED
@@ -228,7 +270,7 @@ export default function Analytics() {
                 )}
               </div>
               <div className="text-xs text-[#64748B] mt-0.5">
-                {dataset.length} Rows • 8 Columns • Ingested via Pandas Engine
+                {dataset.length} Rows • {datasetAnalysis.columns.length} Columns • Ingested via Pandas Engine
               </div>
             </div>
           </div>
@@ -237,23 +279,44 @@ export default function Analytics() {
             <div>
               <span className="text-[#64748B] block text-[11px]">Quality Score</span>
               <span className="font-bold text-sm text-[#1E293B]">
-                {isDataCleaned ? `${cleaningStats.cleanQualityScore}%` : '84.2%'}
+                {isDataCleaned ? `${cleaningStats.cleanQualityScore}%` : `${datasetAnalysis.qualityScore}%`}
               </span>
             </div>
             <div>
               <span className="text-[#64748B] block text-[11px]">Duplicates</span>
-              <span className={`font-bold text-sm ${isDataCleaned ? 'text-emerald-600' : 'text-amber-600'}`}>
-                {isDataCleaned ? '0 removed' : '1 detected'}
+              <span className={`font-bold text-sm ${isDataCleaned || datasetAnalysis.duplicateCount === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                {isDataCleaned
+                  ? `${cleaningStats.duplicatesRemoved} removed`
+                  : `${datasetAnalysis.duplicateCount} detected`}
               </span>
             </div>
             <div>
               <span className="text-[#64748B] block text-[11px]">Missing Cells</span>
-              <span className={`font-bold text-sm ${isDataCleaned ? 'text-emerald-600' : 'text-amber-600'}`}>
-                {isDataCleaned ? '0 (imputed)' : '3 missing'}
+              <span className={`font-bold text-sm ${isDataCleaned || datasetAnalysis.missingCells === 0 ? 'text-emerald-600' : 'text-amber-600'}`}>
+                {isDataCleaned
+                  ? `${cleaningStats.missingValuesImputed} imputed`
+                  : `${datasetAnalysis.missingCells} missing`}
               </span>
             </div>
           </div>
         </div>
+
+        {isDataCleaned && cleaningStats.imputationDetails?.length > 0 && (
+          <div className="mt-3 px-3 py-2 bg-emerald-50/70 border border-emerald-200/80 rounded-lg flex flex-wrap items-center gap-2 text-xs text-emerald-900">
+            <span className="font-semibold">Null Imputation Applied:</span>
+            {cleaningStats.imputationDetails.map((item) => (
+              <span
+                key={item.column}
+                className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-emerald-200 rounded text-[11px] font-medium"
+              >
+                <span className="font-semibold">{item.column}</span>
+                <span>→</span>
+                <span className="font-bold text-emerald-700">{item.value}</span>
+                <span className="text-[#64748B]">({item.method})</span>
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Dynamic KPI Bar */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
@@ -371,88 +434,137 @@ export default function Analytics() {
             </div>
 
             {/* Region Filter */}
-            <select
-              value={selectedRegion}
-              onChange={(e) => setSelectedRegion(e.target.value)}
-              className="text-xs bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-2.5 py-1.5 text-[#1E293B] focus:outline-none focus:bg-white"
-            >
-              <option value="All">All Regions</option>
-              <option value="North America">North America</option>
-              <option value="EMEA">EMEA</option>
-              <option value="APAC">APAC</option>
-              <option value="LATAM">LATAM</option>
-            </select>
+            {isStandardSchema && availableRegions.length > 0 && (
+              <select
+                value={selectedRegion}
+                onChange={(e) => setSelectedRegion(e.target.value)}
+                className="text-xs bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg px-2.5 py-1.5 text-[#1E293B] focus:outline-none focus:bg-white"
+              >
+                <option value="All">All Regions</option>
+                {availableRegions.map((reg) => (
+                  <option key={reg} value={reg}>{reg}</option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
 
         {/* Table Grid */}
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-[#F8FAFC] text-[#64748B] border-b border-[#E2E8F0] font-semibold select-none">
-              <tr>
-                <th className="py-3 px-4 cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('id')}>
-                  <div className="flex items-center gap-1">ID <ArrowUpDown className="w-3 h-3" /></div>
-                </th>
-                <th className="py-3 px-4 cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('date')}>
-                  <div className="flex items-center gap-1">Date <ArrowUpDown className="w-3 h-3" /></div>
-                </th>
-                <th className="py-3 px-4 cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('region')}>
-                  <div className="flex items-center gap-1">Region <ArrowUpDown className="w-3 h-3" /></div>
-                </th>
-                <th className="py-3 px-4">Category</th>
-                <th className="py-3 px-4 text-right cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('units')}>
-                  <div className="flex items-center justify-end gap-1">Units <ArrowUpDown className="w-3 h-3" /></div>
-                </th>
-                <th className="py-3 px-4 text-right cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('revenue')}>
-                  <div className="flex items-center justify-end gap-1">Revenue ($) <ArrowUpDown className="w-3 h-3" /></div>
-                </th>
-                <th className="py-3 px-4 text-right cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('margin')}>
-                  <div className="flex items-center justify-end gap-1">Margin (%) <ArrowUpDown className="w-3 h-3" /></div>
-                </th>
-                <th className="py-3 px-4">Client Tier</th>
-                <th className="py-3 px-4">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#F1F5F9]">
-              {filteredData.map((row) => (
-                <tr key={`${row.id}-${row.date}`} className="hover:bg-[#F8FAFC] transition-colors">
-                  <td className="py-2.5 px-4 font-mono text-[11px] text-[#64748B]">#{row.id}</td>
-                  <td className="py-2.5 px-4 text-[#334155]">{row.date}</td>
-                  <td className="py-2.5 px-4 font-medium text-[#1E293B]">{row.region}</td>
-                  <td className="py-2.5 px-4 text-[#334155]">{row.category}</td>
-                  <td className="py-2.5 px-4 text-right font-medium">
-                    {row.units === null || row.units === undefined ? (
-                      <span className="text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold">NULL</span>
-                    ) : (
-                      row.units
-                    )}
-                  </td>
-                  <td className="py-2.5 px-4 text-right font-semibold text-[#1E293B]">
-                    ${row.revenue?.toLocaleString()}
-                  </td>
-                  <td className="py-2.5 px-4 text-right font-semibold">
-                    {row.margin === null || row.margin === undefined ? (
-                      <span className="text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold">NULL</span>
-                    ) : (
-                      <span className={row.margin >= 50 ? 'text-emerald-600' : 'text-[#334155]'}>
-                        {row.margin}%
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2.5 px-4">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-700">
-                      {row.clientTier}
-                    </span>
-                  </td>
-                  <td className="py-2.5 px-4">
-                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
-                      <CheckCircle2 className="w-3 h-3" /> {row.status}
-                    </span>
-                  </td>
+          {isStandardSchema ? (
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#F8FAFC] text-[#64748B] border-b border-[#E2E8F0] font-semibold select-none">
+                <tr>
+                  <th className="py-3 px-4 cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('id')}>
+                    <div className="flex items-center gap-1">ID <ArrowUpDown className="w-3 h-3" /></div>
+                  </th>
+                  <th className="py-3 px-4 cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('date')}>
+                    <div className="flex items-center gap-1">Date <ArrowUpDown className="w-3 h-3" /></div>
+                  </th>
+                  <th className="py-3 px-4 cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('region')}>
+                    <div className="flex items-center gap-1">Region <ArrowUpDown className="w-3 h-3" /></div>
+                  </th>
+                  <th className="py-3 px-4">Category</th>
+                  <th className="py-3 px-4 text-right cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('units')}>
+                    <div className="flex items-center justify-end gap-1">Units <ArrowUpDown className="w-3 h-3" /></div>
+                  </th>
+                  <th className="py-3 px-4 text-right cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('revenue')}>
+                    <div className="flex items-center justify-end gap-1">Revenue ($) <ArrowUpDown className="w-3 h-3" /></div>
+                  </th>
+                  <th className="py-3 px-4 text-right cursor-pointer hover:text-[#1E293B]" onClick={() => handleSort('margin')}>
+                    <div className="flex items-center justify-end gap-1">Margin (%) <ArrowUpDown className="w-3 h-3" /></div>
+                  </th>
+                  <th className="py-3 px-4">Client Tier</th>
+                  <th className="py-3 px-4">Status</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-[#F1F5F9]">
+                {filteredData.map((row, idx) => (
+                  <tr key={`${row.id ?? idx}-${row.date ?? idx}`} className="hover:bg-[#F8FAFC] transition-colors">
+                    <td className="py-2.5 px-4 font-mono text-[11px] text-[#64748B]">#{row.id}</td>
+                    <td className="py-2.5 px-4 text-[#334155]">{row.date}</td>
+                    <td className="py-2.5 px-4 font-medium text-[#1E293B]">{row.region}</td>
+                    <td className="py-2.5 px-4 text-[#334155]">{row.category}</td>
+                    <td className="py-2.5 px-4 text-right font-medium">
+                      {row.units === null || row.units === undefined ? (
+                        <span className="text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold">NULL</span>
+                      ) : (
+                        row.units
+                      )}
+                    </td>
+                    <td className="py-2.5 px-4 text-right font-semibold text-[#1E293B]">
+                      {row.revenue === null || row.revenue === undefined ? (
+                        <span className="text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold">NULL</span>
+                      ) : (
+                        `$${row.revenue.toLocaleString()}`
+                      )}
+                    </td>
+                    <td className="py-2.5 px-4 text-right font-semibold">
+                      {row.margin === null || row.margin === undefined ? (
+                        <span className="text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold">NULL</span>
+                      ) : (
+                        <span className={row.margin >= 50 ? 'text-emerald-600' : 'text-[#334155]'}>
+                          {row.margin}%
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-700">
+                        {row.clientTier}
+                      </span>
+                    </td>
+                    <td className="py-2.5 px-4">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">
+                        <CheckCircle2 className="w-3 h-3" /> {row.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead className="bg-[#F8FAFC] text-[#64748B] border-b border-[#E2E8F0] font-semibold select-none">
+                <tr>
+                  {dynamicColumns.map((col) => {
+                    const isNumCol = datasetAnalysis.numericColumns.includes(col);
+                    return (
+                      <th
+                        key={col}
+                        className={`py-3 px-4 cursor-pointer hover:text-[#1E293B] ${isNumCol ? 'text-right' : ''}`}
+                        onClick={() => handleSort(col)}
+                      >
+                        <div className={`flex items-center gap-1 ${isNumCol ? 'justify-end' : ''}`}>
+                          {col} <ArrowUpDown className="w-3 h-3" />
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#F1F5F9]">
+                {filteredData.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-[#F8FAFC] transition-colors">
+                    {dynamicColumns.map((col) => {
+                      const val = row[col];
+                      const isNumCol = datasetAnalysis.numericColumns.includes(col);
+                      return (
+                        <td key={col} className={`py-2.5 px-4 ${isNumCol ? 'text-right font-medium text-[#1E293B]' : 'text-[#334155]'}`}>
+                          {val === null || val === undefined ? (
+                            <span className="text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[10px] font-bold">NULL</span>
+                          ) : typeof val === 'number' ? (
+                            val.toLocaleString()
+                          ) : (
+                            String(val)
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>
