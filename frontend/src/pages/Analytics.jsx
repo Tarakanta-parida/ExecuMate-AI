@@ -14,7 +14,12 @@ import {
   Percent,
   Layers,
   ArrowUpDown,
-  Trash2
+  Trash2,
+  Package,
+  Tag,
+  Activity,
+  Award,
+  Database
 } from 'lucide-react';
 import {
   BarChart,
@@ -31,6 +36,20 @@ import {
 } from 'recharts';
 import { useApp } from '../context/AppContext';
 import { buildDatasetKpiCards } from '../utils/dataCleaning';
+
+const KPI_ICON_MAP = {
+  revenue: { Icon: DollarSign, badgeClass: 'bg-emerald-50 text-emerald-600' },
+  price: { Icon: Tag, badgeClass: 'bg-indigo-50 text-indigo-600' },
+  avg_quantity: { Icon: TrendingUp, badgeClass: 'bg-blue-50 text-[#2563EB]' },
+  quantity: { Icon: Package, badgeClass: 'bg-violet-50 text-violet-600' },
+  percent: { Icon: Percent, badgeClass: 'bg-emerald-50 text-emerald-600' },
+  defect: { Icon: AlertTriangle, badgeClass: 'bg-amber-50 text-amber-600' },
+  max: { Icon: Award, badgeClass: 'bg-amber-50 text-amber-600' },
+  records: { Icon: Database, badgeClass: 'bg-slate-100 text-slate-600' },
+  columns: { Icon: Layers, badgeClass: 'bg-blue-50 text-[#2563EB]' },
+  average: { Icon: TrendingUp, badgeClass: 'bg-blue-50 text-[#2563EB]' },
+  metric: { Icon: Activity, badgeClass: 'bg-blue-50 text-[#2563EB]' }
+};
 
 export default function Analytics() {
   const {
@@ -501,7 +520,7 @@ export default function Analytics() {
           </div>
         )}
 
-        {/* Dynamic KPI Bar (Pure KPIs reacting to Slicer) */}
+        {/* Dynamic KPI Bar (Pure KPIs with semantic icons reacting to Slicer) */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-4">
           {dynamicKpiCards.map((kpi, idx) => {
             const valueColor =
@@ -512,13 +531,23 @@ export default function Analytics() {
                   : kpi.tone === 'amber'
                     ? 'text-amber-600'
                     : 'text-[#1E293B]';
+            const iconMeta = KPI_ICON_MAP[kpi.iconKey] || KPI_ICON_MAP.metric;
+            const KpiIcon = iconMeta.Icon;
             return (
-              <div key={idx} className="p-3 bg-[#F8FAFC] rounded-lg">
-                <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
-                  {kpi.label}
-                </span>
-                <div className={`text-lg font-bold mt-0.5 ${valueColor}`}>
-                  {kpi.value}
+              <div
+                key={idx}
+                className="p-3.5 bg-[#F8FAFC] border border-[#E2E8F0]/70 rounded-xl flex items-center justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <span className="text-[11px] font-semibold text-[#64748B] uppercase truncate block">
+                    {kpi.label}
+                  </span>
+                  <div className={`text-lg font-bold mt-0.5 truncate ${valueColor}`}>
+                    {kpi.value}
+                  </div>
+                </div>
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${iconMeta.badgeClass}`}>
+                  <KpiIcon className="w-5 h-5" />
                 </div>
               </div>
             );

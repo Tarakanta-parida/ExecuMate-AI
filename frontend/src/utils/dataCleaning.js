@@ -423,6 +423,22 @@ function formatKpiMetricValue(col, num) {
   return formatted;
 }
 
+function resolveKpiIconKey(col, aggType = 'total') {
+  if (aggType === 'records') return 'records';
+  if (aggType === 'columns') return 'columns';
+  const name = String(col || '');
+  if (/defect|return|error|reject|loss|damage/i.test(name)) return 'defect';
+  if (isPercentColumn(name)) return 'percent';
+  if (/revenue|sales|total_?amount|amount|spend|income|turnover|gmv|salary|budget|profit/i.test(name)) return 'revenue';
+  if (/negotiated_?price|unit_?price|price|cost/i.test(name)) return 'price';
+  if (/quantity|qty|units|volume|count|stock|order/i.test(name)) {
+    return aggType === 'avg' ? 'avg_quantity' : 'quantity';
+  }
+  if (aggType === 'max') return 'max';
+  if (aggType === 'avg') return 'average';
+  return 'metric';
+}
+
 /**
  * Build up to 4 pure business KPI cards dynamically from any dataset's rows and numeric columns.
  */
@@ -433,8 +449,8 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
 
   if (activeMetrics.length === 0) {
     return [
-      { label: 'Total Records', value: safeRows.length.toLocaleString(), tone: 'dark' },
-      { label: 'Columns Analyzed', value: columns.length.toLocaleString(), tone: 'blue' }
+      { label: 'Total Records', value: safeRows.length.toLocaleString(), tone: 'dark', iconKey: 'records' },
+      { label: 'Columns Analyzed', value: columns.length.toLocaleString(), tone: 'blue', iconKey: 'columns' }
     ];
   }
 
@@ -463,7 +479,8 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
     cards.push({
       label: `Total ${formatColumnTitle(revCol)}`,
       value: formatKpiMetricValue(revCol, sumOf(revCol)),
-      tone: 'dark'
+      tone: 'dark',
+      iconKey: resolveKpiIconKey(revCol, 'total')
     });
   } else if (qtyCol && priceCol) {
     const estRevenue = safeRows.reduce((acc, r) => {
@@ -474,14 +491,16 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
     cards.push({
       label: 'Total Revenue',
       value: `$${estRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
-      tone: 'dark'
+      tone: 'dark',
+      iconKey: 'revenue'
     });
   } else {
     const c0 = activeMetrics[0];
     cards.push({
       label: `Total ${formatColumnTitle(c0)}`,
       value: formatKpiMetricValue(c0, sumOf(c0)),
-      tone: 'dark'
+      tone: 'dark',
+      iconKey: resolveKpiIconKey(c0, 'total')
     });
   }
 
@@ -490,7 +509,8 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
   cards.push({
     label: `Avg ${formatColumnTitle(avgTarget)}`,
     value: formatKpiMetricValue(avgTarget, avgOf(avgTarget)),
-    tone: 'blue'
+    tone: 'blue',
+    iconKey: resolveKpiIconKey(avgTarget, 'avg')
   });
 
   // 3. Total Quantity (or secondary metric total / max)
@@ -498,21 +518,24 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
     cards.push({
       label: `Total ${formatColumnTitle(qtyCol)}`,
       value: formatKpiMetricValue(qtyCol, sumOf(qtyCol)),
-      tone: 'emerald'
+      tone: 'emerald',
+      iconKey: resolveKpiIconKey(qtyCol, 'total')
     });
   } else if (activeMetrics[1]) {
     const c1 = activeMetrics[1];
     cards.push({
       label: `Total ${formatColumnTitle(c1)}`,
       value: formatKpiMetricValue(c1, sumOf(c1)),
-      tone: 'emerald'
+      tone: 'emerald',
+      iconKey: resolveKpiIconKey(c1, 'total')
     });
   } else {
     const c0 = activeMetrics[0];
     cards.push({
       label: `Max ${formatColumnTitle(c0)}`,
       value: formatKpiMetricValue(c0, maxOf(c0)),
-      tone: 'emerald'
+      tone: 'emerald',
+      iconKey: resolveKpiIconKey(c0, 'max')
     });
   }
 
@@ -529,13 +552,15 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
     cards.push({
       label: `Total ${formatColumnTitle(fourthCol)}`,
       value: formatKpiMetricValue(fourthCol, sumOf(fourthCol)),
-      tone: 'amber'
+      tone: 'amber',
+      iconKey: resolveKpiIconKey(fourthCol, 'total')
     });
   } else {
     cards.push({
       label: `Avg ${formatColumnTitle(fourthCol)}`,
       value: formatKpiMetricValue(fourthCol, avgOf(fourthCol)),
-      tone: 'emerald'
+      tone: 'emerald',
+      iconKey: resolveKpiIconKey(fourthCol, 'avg')
     });
   }
 
