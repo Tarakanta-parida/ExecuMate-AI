@@ -440,7 +440,8 @@ function resolveKpiIconKey(col, aggType = 'total') {
 }
 
 /**
- * Build up to 4 pure business KPI cards dynamically from any dataset's rows and numeric columns.
+ * Build up to 4 pure business KPI cards dynamically from any dataset's rows and numeric columns,
+ * strictly ordered from most important (1st) to least important (4th).
  */
 export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
   const safeRows = Array.isArray(rows) ? rows : [];
@@ -472,15 +473,28 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
   const marginCol = activeMetrics.find((c) => /margin|profit|discount|pct|percent/i.test(c));
   const defectCol = activeMetrics.find((c) => /defect|return|error|reject|loss/i.test(c));
 
-  const cards = [];
+  const candidates = [];
+  const addCandidate = (card) => {
+    if (!candidates.some((c) => c.label === card.label)) {
+      candidates.push(card);
+    }
+  };
 
-  // 1. Total Revenue (explicit revenue column or Quantity * Price)
+  // Priority 100: Headline Revenue / Sales
   if (revCol) {
-    cards.push({
+    addCandidate({
+      priority: 100,
       label: `Total ${formatColumnTitle(revCol)}`,
       value: formatKpiMetricValue(revCol, sumOf(revCol)),
       tone: 'dark',
       iconKey: resolveKpiIconKey(revCol, 'total')
+    });
+    addCandidate({
+      priority: 62,
+      label: `Avg ${formatColumnTitle(revCol)}`,
+      value: formatKpiMetricValue(revCol, avgOf(revCol)),
+      tone: 'blue',
+      iconKey: resolveKpiIconKey(revCol, 'avg')
     });
   } else if (qtyCol && priceCol) {
     const estRevenue = safeRows.reduce((acc, r) => {
@@ -488,83 +502,112 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
       const p = typeof r[priceCol] === 'number' ? r[priceCol] : 0;
       return acc + q * p;
     }, 0);
-    cards.push({
+    addCandidate({
+      priority: 100,
       label: 'Total Revenue',
       value: `$${estRevenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}`,
       tone: 'dark',
       iconKey: 'revenue'
     });
-  } else {
-    const c0 = activeMetrics[0];
-    cards.push({
-      label: `Total ${formatColumnTitle(c0)}`,
-      value: formatKpiMetricValue(c0, sumOf(c0)),
-      tone: 'dark',
-      iconKey: resolveKpiIconKey(c0, 'total')
+  }
+
+  // Priority 90: Margin / Profitability or Salary/Budget Total
+  if (marginCol) {
+    const isProfitSum = /profit/i.test(marginCol) && !/pct|percent|margin/i.test(marginCol);
+    addCandidate({
+      priority: 90,
+      label: isProfitSum ? `Total ${formatColumnTitle(marginCol)}` : `Avg ${formatColumnTitle(marginCol)}`,
+      value: formatKpiMetricValue(marginCol, isProfitSum ? sumOf(marginCol) : avgOf(marginCol)),
+      tone: 'emerald',
+      iconKey: resolveKpiIconKey(marginCol, isProfitSum ? 'total' : 'avg')
     });
   }
 
-  // 2. Avg Quantity (or Avg primary metric)
-  const avgTarget = qtyCol || activeMetrics[0];
-  cards.push({
-    label: `Avg ${formatColumnTitle(avgTarget)}`,
-    value: formatKpiMetricValue(avgTarget, avgOf(avgTarget)),
-    tone: 'blue',
-    iconKey: resolveKpiIconKey(avgTarget, 'avg')
-  });
-
-  // 3. Total Quantity (or secondary metric total / max)
+  // Priority 80 / 50: Total Quantity (2nd tier) & Avg Quantity (4th tier)
   if (qtyCol) {
-    cards.push({
+    addCandidate({
+      priority: 80,
       label: `Total ${formatColumnTitle(qtyCol)}`,
       value: formatKpiMetricValue(qtyCol, sumOf(qtyCol)),
       tone: 'emerald',
       iconKey: resolveKpiIconKey(qtyCol, 'total')
     });
-  } else if (activeMetrics[1]) {
-    const c1 = activeMetrics[1];
-    cards.push({
-      label: `Total ${formatColumnTitle(c1)}`,
-      value: formatKpiMetricValue(c1, sumOf(c1)),
-      tone: 'emerald',
-      iconKey: resolveKpiIconKey(c1, 'total')
+    addCandidate({
+      priority: 50,
+      label: `Avg ${formatColumnTitle(qtyCol)}`,
+      value: formatKpiMetricValue(qtyCol, avgOf(qtyCol)),
+      tone: 'blue',
+      iconKey: resolveKpiIconKey(qtyCol, 'avg')
     });
-  } else {
+  }
+
+  // Priority 90 / 70 / 60: Price, Cost, Salary, Budget
+  if (priceCol) {
+    const isAggregateSpend = /cost|salary|budget/i.test(priceCol);
+    if (isAggregateSpend) {
+      addCandidate({
+        priority: /salary|budget/i.test(priceCol) ? 90 : 70,
+        label: `Total ${formatColumnTitle(priceCol)}`,
+        value: formatKpiMetricValue(priceCol, sumOf(priceCol)),
+        tone: 'dark',
+        iconKey: resolveKpiIconKey(priceCol, 'total')
+      });
+    }
+    addCandidate({
+      priority: 60,
+      label: `Avg ${formatColumnTitle(priceCol)}`,
+      value: formatKpiMetricValue(priceCol, avgOf(priceCol)),
+      tone: 'blue',
+      iconKey: resolveKpiIconKey(priceCol, 'avg')
+    });
+  }
+
+  // Priority 40: Quality / Defect / Risk Metric
+  if (defectCol) {
+    addCandidate({
+      priority: 40,
+      label: `Total ${formatColumnTitle(defectCol)}`,
+      value: formatKpiMetricValue(defectCol, sumOf(defectCol)),
+      tone: 'amber',
+      iconKey: resolveKpiIconKey(defectCol, 'total')
+    });
+  }
+
+  // Fill remaining slots from any other numeric columns (Totals rank ahead of Averages)
+  activeMetrics.forEach((col, idx) => {
+    if (col === revCol || col === qtyCol || col === priceCol || col === marginCol || col === defectCol) return;
+    addCandidate({
+      priority: 30 - idx * 0.1,
+      label: `Total ${formatColumnTitle(col)}`,
+      value: formatKpiMetricValue(col, sumOf(col)),
+      tone: idx === 0 ? 'dark' : 'emerald',
+      iconKey: resolveKpiIconKey(col, 'total')
+    });
+    addCandidate({
+      priority: 20 - idx * 0.1,
+      label: `Avg ${formatColumnTitle(col)}`,
+      value: formatKpiMetricValue(col, avgOf(col)),
+      tone: 'blue',
+      iconKey: resolveKpiIconKey(col, 'avg')
+    });
+  });
+
+  // Fallback Max if dataset has only 1 numeric column
+  if (candidates.length < 4 && activeMetrics[0]) {
     const c0 = activeMetrics[0];
-    cards.push({
+    addCandidate({
+      priority: 10,
       label: `Max ${formatColumnTitle(c0)}`,
       value: formatKpiMetricValue(c0, maxOf(c0)),
-      tone: 'emerald',
+      tone: 'amber',
       iconKey: resolveKpiIconKey(c0, 'max')
     });
   }
 
-  // 4. Fourth KPI: Margin / Avg Price / Defect / Next numeric column
-  const used = new Set([revCol, qtyCol].filter(Boolean));
-  const fourthCol =
-    (marginCol && !used.has(marginCol) && marginCol) ||
-    (priceCol && !used.has(priceCol) && priceCol) ||
-    (defectCol && !used.has(defectCol) && defectCol) ||
-    activeMetrics.find((c) => !used.has(c)) ||
-    activeMetrics[0];
-
-  if (fourthCol === defectCol) {
-    cards.push({
-      label: `Total ${formatColumnTitle(fourthCol)}`,
-      value: formatKpiMetricValue(fourthCol, sumOf(fourthCol)),
-      tone: 'amber',
-      iconKey: resolveKpiIconKey(fourthCol, 'total')
-    });
-  } else {
-    cards.push({
-      label: `Avg ${formatColumnTitle(fourthCol)}`,
-      value: formatKpiMetricValue(fourthCol, avgOf(fourthCol)),
-      tone: 'emerald',
-      iconKey: resolveKpiIconKey(fourthCol, 'avg')
-    });
-  }
-
-  return cards;
+  return candidates
+    .sort((a, b) => b.priority - a.priority)
+    .slice(0, 4)
+    .map(({ priority: _priority, ...card }) => card);
 }
 
 function extractTimeBucket(rawVal) {
