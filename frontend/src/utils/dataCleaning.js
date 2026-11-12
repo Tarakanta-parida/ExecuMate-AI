@@ -306,3 +306,99 @@ export function parseCsvText(text) {
 
   return { rows, columns: headers };
 }
+
+export function buildDatasetDocumentInsight(rows, fileName, cleaningStats = {}) {
+  const analysis = analyzeDatasetRows(rows);
+  const numCols = analysis.numericColumns.filter((c) => !/^(id|.*_id|sr_?no|index)$/i.test(c));
+  const metricCols = numCols.length > 0 ? numCols : analysis.numericColumns;
+
+  const metricStats = metricCols.slice(0, 4).map((col) => {
+    const vals = rows.map((r) => r[col]).filter((v) => typeof v === 'number' && Number.isFinite(v));
+    const { stats } = computeNumericImputation(vals, 'mean');
+    const sum = vals.reduce((a, b) => a + b, 0);
+    return { col, sum, ...stats };
+  });
+
+  const statSummary = metricStats
+    .map((m) => `${m.col}: total ${m.sum.toLocaleString()}, avg ${m.mean.toLocaleString()}, max ${m.max.toLocaleString()}`)
+    .join('; ');
+
+  const imputationList = (cleaningStats.imputationDetails || [])
+    .map((d) => `${d.column} (${d.count} nulls replaced with ${d.value} via ${d.method})`)
+    .join(', ');
+
+  const keyPoints = [
+    `Dataset contains ${analysis.totalRows} cleaned records across ${analysis.columns.length} columns (${analysis.columns.slice(0, 6).join(', ')}${analysis.columns.length > 6 ? '...' : ''}).`,
+    ...(metricStats.length > 0 ? [`Key numeric metrics — ${statSummary}.`] : []),
+    ...(imputationList ? [`Null Imputation applied: ${imputationList}.`] : ['Zero missing cells remain after validation.'])
+  ];
+
+  const recommendations = [
+    'Review the MIS & Data Analytics charts for segment-level breakdowns.',
+    'Download the generated Excel report in Reports & Executive Insights for stakeholder distribution.'
+  ];
+
+  return {
+    id: `dataset-doc-${fileName}`,
+    title: fileName,
+    docType: fileName.toLowerCase().endsWith('.csv') ? 'CSV' : 'Excel',
+    isDatasetDoc: true,
+    size: `${Math.max(1, Math.round(JSON.stringify(rows).length / 1024))} KB`,
+    pages: Math.max(1, Math.ceil(rows.length / 25)),
+    uploadedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    status: 'ready',
+    summary: `Uploaded dataset "${fileName}" with ${analysis.totalRows} rows and ${analysis.columns.length} columns. ${statSummary || 'Ready for dataset Q&A.'}`,
+    keyPoints,
+    recommendations
+  };
+}
+
+export function answerDatasetQuestion(question, rows, fileName, cleaningStats = {}) {
+  const analysis = analyzeDatasetRows(rows);
+  const qLower = question.toLowerCase();
+  const metricCols = analysis.numericColumns;
+
+  if (!rows || rows.length === 0) {
+    return {
+      answer: `No rows are currently loaded for "${fileName}".`,
+      citations: []
+    };
+  }
+
+  const matchedCols = metricCols.filter((c) => qLower.includes(c.toLowerCase()));
+  const targetCols = matchedCols.length > 0 ? matchedCols : metricCols.slice(0, 3);
+
+  if (qLower.includes('null') || qLower.includes('missing') || qLower.includes('clean') || qLower.includes('imput')) {
+    const details = cleaningStats.imputationDetails || [];
+    if (details.length > 0) {
+      const desc = details.map((d) => `• ${d.column}: ${d.count} null(s) replaced with ${d.value} (${d.method})`).join('\n');
+      return {
+        answer: `In "${fileName}", ${cleaningStats.duplicatesRemoved || 0} duplicate row(s) were removed and ${cleaningStats.missingValuesImputed || 0} missing cell(s) were replaced:\n${desc}`,
+        citations: [{ page: 1, text: `${fileName} • Data Cleaning & Imputation Audit` }]
+      };
+    }
+    return {
+      answer: `"${fileName}" currently has ${analysis.totalRows} rows and ${analysis.missingCells} missing cells.`,
+      citations: [{ page: 1, text: `${fileName} • Schema Audit` }]
+    };
+  }
+
+  if (targetCols.length > 0) {
+    const lines = targetCols.map((col) => {
+      const vals = rows.map((r) => r[col]).filter((v) => typeof v === 'number' && Number.isFinite(v));
+      const { stats } = computeNumericImputation(vals, 'mean');
+      const sum = vals.reduce((a, b) => a + b, 0);
+      const min = vals.length ? Math.min(...vals) : 0;
+      return `• ${col}: Total = ${sum.toLocaleString()}, Mean = ${stats.mean.toLocaleString()}, Median = ${stats.median.toLocaleString()}, Min = ${min.toLocaleString()}, Max = ${stats.max.toLocaleString()}`;
+    });
+    return {
+      answer: `Computed directly from "${fileName}" (${analysis.totalRows} rows):\n${lines.join('\n')}`,
+      citations: targetCols.map((col, idx) => ({ page: idx + 1, text: `Column "${col}" across ${analysis.totalRows} rows` }))
+    };
+  }
+
+  return {
+    answer: `"${fileName}" contains ${analysis.totalRows} rows across columns: ${analysis.columns.join(', ')}.`,
+    citations: [{ page: 1, text: `${fileName} • ${analysis.columns.length} columns` }]
+  };
+}

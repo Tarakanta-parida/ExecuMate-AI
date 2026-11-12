@@ -1,6 +1,7 @@
 import os
 import shutil
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List
 from ..database import get_db
@@ -76,6 +77,17 @@ def ask_document_question_api(doc_id: str, req: DocumentQuestionRequest, db: Ses
     chunks = db.query(DocumentChunk).filter(DocumentChunk.document_id == doc_id).all()
     chunks_data = [{"page_number": c.page_number, "content": c.content} for c in chunks]
     return answer_document_question(req.question, chunks_data)
+
+@router.get("/{doc_id}/download")
+def download_document(doc_id: str, db: Session = Depends(get_db)):
+    doc = db.query(Document).filter(Document.id == doc_id).first()
+    if not doc or not doc.storage_path or not os.path.exists(doc.storage_path):
+        raise HTTPException(status_code=404, detail="Document file not found")
+    return FileResponse(
+        path=doc.storage_path,
+        filename=doc.filename,
+        media_type="application/pdf"
+    )
 
 @router.delete("/{doc_id}")
 def delete_document(doc_id: str, db: Session = Depends(get_db)):

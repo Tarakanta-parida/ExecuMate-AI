@@ -120,6 +120,7 @@ export const api = {
       ),
     }),
   getReportDownloadUrl: (reportId) => `${API_BASE_URL}/reports/${reportId}/download`,
+  getDocumentDownloadUrl: (docId) => `${API_BASE_URL}/documents/${docId}/download`,
 
   // Automation
   getWorkflows: () => request('/automation/workflows'),

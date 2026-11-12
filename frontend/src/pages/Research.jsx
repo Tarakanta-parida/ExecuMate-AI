@@ -44,8 +44,9 @@ export default function Research() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      showToast('Please upload a PDF document.', 'warning');
+    const lower = file.name.toLowerCase();
+    if (!(lower.endsWith('.pdf') || lower.endsWith('.csv') || lower.endsWith('.xlsx') || lower.endsWith('.xls'))) {
+      showToast('Please upload a PDF, CSV, or Excel file.', 'warning');
       return;
     }
 
@@ -58,11 +59,17 @@ export default function Research() {
     }
   };
 
-  const samplePrompts = [
-    "What are the main operational risks highlighted?",
-    "Summarize the key financial metrics and EBITDA margin.",
-    "What specific recommendations are made for leadership?"
-  ];
+  const samplePrompts = selectedDocument?.isDatasetDoc
+    ? [
+        'Summarize all numeric metrics and totals',
+        'Which null values were replaced in this dataset?',
+        'What are the columns and row count?'
+      ]
+    : [
+        'What are the main operational risks highlighted?',
+        'Summarize the key financial metrics and EBITDA margin.',
+        'What specific recommendations are made for leadership?'
+      ];
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto h-[calc(100vh-8.5rem)] flex flex-col">
@@ -81,10 +88,10 @@ export default function Research() {
         <div className="flex items-center gap-2">
           <label className="inline-flex items-center gap-2 px-3.5 py-2 bg-[#2563EB] hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer shadow-sm transition-colors">
             <Upload className="w-4 h-4" />
-            <span>{isUploading ? 'Extracting Text...' : 'Upload PDF'}</span>
+            <span>{isUploading ? 'Processing File...' : 'Upload PDF / CSV / Excel'}</span>
             <input
               type="file"
-              accept=".pdf"
+              accept=".pdf,.csv,.xlsx,.xls"
               className="hidden"
               disabled={isUploading}
               onChange={handleFileUpload}
@@ -108,8 +115,8 @@ export default function Research() {
             {documents.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-4 text-[#64748B]">
                 <FileText className="w-7 h-7 mb-2 text-slate-300" />
-                <p className="text-xs font-semibold text-[#1E293B]">No PDFs Uploaded</p>
-                <p className="text-[11px] mt-1">Click "Upload PDF" above to index a document from your computer.</p>
+                <p className="text-xs font-semibold text-[#1E293B]">No Files Uploaded Yet</p>
+                <p className="text-[11px] mt-1">Upload a PDF, CSV, or Excel file above to extract insights and chat with your data.</p>
               </div>
             ) : (
               documents.map((doc) => {
@@ -126,7 +133,15 @@ export default function Research() {
                   >
                     <div className="flex items-start justify-between gap-1.5">
                       <div className="flex items-start gap-2.5 min-w-0 flex-1">
-                        <div className={`p-2 rounded-lg shrink-0 ${isSelected ? 'bg-blue-600 text-white' : 'bg-red-50 text-red-600'}`}>
+                        <div
+                          className={`p-2 rounded-lg shrink-0 ${
+                            isSelected
+                              ? 'bg-blue-600 text-white'
+                              : doc.isDatasetDoc
+                                ? 'bg-emerald-50 text-emerald-600'
+                                : 'bg-red-50 text-red-600'
+                          }`}
+                        >
                           <FileText className="w-4 h-4" />
                         </div>
                         <div className="min-w-0 flex-1">
@@ -134,12 +149,12 @@ export default function Research() {
                             {doc.title}
                           </div>
                           <div className="flex items-center gap-2 mt-1 text-[11px] text-[#64748B]">
-                            <span>{doc.pages} pages</span>
+                            <span>{doc.docType || 'PDF'}</span>
                             <span>•</span>
                             <span>{doc.size}</span>
                           </div>
                           <div className="mt-1.5 flex items-center gap-1 text-[10px] text-[#16A34A] font-medium">
-                            <CheckCircle2 className="w-3 h-3" /> Indexed in pgvector
+                            <CheckCircle2 className="w-3 h-3" /> {doc.isDatasetDoc ? 'Dataset Indexed' : 'Indexed in pgvector'}
                           </div>
                         </div>
                       </div>

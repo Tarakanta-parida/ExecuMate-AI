@@ -13,7 +13,9 @@ import { api } from '../services/api';
 import {
   analyzeDatasetRows,
   cleanDatasetRows,
-  parseCsvText
+  parseCsvText,
+  buildDatasetDocumentInsight,
+  answerDatasetQuestion
 } from '../utils/dataCleaning';
 
 const AppContext = createContext();
@@ -28,7 +30,9 @@ const STORAGE_KEYS = {
   datasetName: 'execumate_dataset_name_v2',
   datasetId: 'execumate_dataset_id_v2',
   cleaningStats: 'execumate_cleaning_stats_v2',
-  isDataCleaned: 'execumate_is_data_cleaned_v2'
+  isDataCleaned: 'execumate_is_data_cleaned_v2',
+  projects: 'execumate_projects_v2',
+  tasks: 'execumate_tasks_v2'
 };
 
 function readStorage(key, fallback) {
@@ -123,9 +127,9 @@ export function AppProvider({ children }) {
     }, 4000);
   };
 
-  // Projects & Tasks
-  const [projects, setProjects] = useState(mockProjects);
-  const [tasks, setTasks] = useState(mockTasks);
+  // Projects & Tasks (persisted so file-derived projects & tasks survive refresh)
+  const [projects, setProjects] = useState(() => readStorage(STORAGE_KEYS.projects, mockProjects));
+  const [tasks, setTasks] = useState(() => readStorage(STORAGE_KEYS.tasks, mockTasks));
 
   // Sync with FastAPI backend on load
   useEffect(() => {
@@ -145,7 +149,15 @@ export function AppProvider({ children }) {
             tasksTotal: 12,
             tasksCompleted: 8
           }));
-          setProjects(formatted);
+          setProjects(prev => {
+            const merged = [
+              ...prev.filter(pp => pp.sourceFile),
+              ...formatted,
+              ...prev.filter(pp => !pp.sourceFile && !formatted.some(fp => fp.id === pp.id))
+            ];
+            writeStorage(STORAGE_KEYS.projects, merged);
+            return merged;
+          });
         }
       } catch (err) {
         // Keeps fallback
@@ -166,7 +178,11 @@ export function AppProvider({ children }) {
             dueDate: t.due_date || "2026-11-15",
             isOverdue: t.is_overdue || false
           }));
-          setTasks(prev => [...formattedTasks, ...prev.filter(pt => !formattedTasks.some(ft => ft.id === pt.id))]);
+          setTasks(prev => {
+            const merged = [...prev.filter(pt => pt.sourceFile), ...formattedTasks, ...prev.filter(pt => !pt.sourceFile && !formattedTasks.some(ft => ft.id === pt.id))];
+            writeStorage(STORAGE_KEYS.tasks, merged);
+            return merged;
+          });
         }
       } catch (err) {
         // Keeps fallback
@@ -270,7 +286,11 @@ export function AppProvider({ children }) {
       tasksTotal: 0,
       tasksCompleted: 0
     };
-    setProjects([proj, ...projects]);
+    setProjects(prev => {
+      const next = [proj, ...prev];
+      writeStorage(STORAGE_KEYS.projects, next);
+      return next;
+    });
     showToast(`Project "${proj.name}" created.`);
 
     try {
@@ -292,7 +312,11 @@ export function AppProvider({ children }) {
       status: "pending",
       isOverdue: false
     };
-    setTasks([task, ...tasks]);
+    setTasks(prev => {
+      const next = [task, ...prev];
+      writeStorage(STORAGE_KEYS.tasks, next);
+      return next;
+    });
     showToast(`Task "${task.title}" added to project.`);
 
     try {
@@ -310,12 +334,11 @@ export function AppProvider({ children }) {
   };
 
   const updateTaskStatus = async (taskId, newStatus) => {
-    setTasks(prev => prev.map(t => {
-      if (t.id === taskId) {
-        return { ...t, status: newStatus };
-      }
-      return t;
-    }));
+    setTasks(prev => {
+      const next = prev.map(t => (t.id === taskId ? { ...t, status: newStatus } : t));
+      writeStorage(STORAGE_KEYS.tasks, next);
+      return next;
+    });
     showToast("Task status updated.");
 
     try {
@@ -434,6 +457,172 @@ export function AppProvider({ children }) {
 
   const [isDatasetUploading, setIsDatasetUploading] = useState(false);
 
+  const syncFileAcrossProjectsAndTasks = ({ fileName, fileType, rowCount = 0, nullsImputed = 0, rows = [] }) => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const projectId = `proj-file-${fileName.replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+
+    const newProj = {
+      id: projectId,
+      name: `${fileType}: ${fileName}`,
+      owner: currentUser.name,
+      status: 'active',
+      progress: fileType === 'PDF' ? 50 : 75,
+      startDate: todayStr,
+      dueDate: todayStr,
+      description:
+        fileType === 'PDF'
+          ? `Uploaded PDF indexed in AI Research Assistant & Executive Briefings.`
+          : `Uploaded ${fileType} dataset (${rowCount} rows, ${nullsImputed} nulls imputed) synced across Analytics, Research & Reports.`,
+      sourceFile: fileName,
+      fileType,
+      tasksTotal: 2,
+      tasksCompleted: fileType === 'PDF' ? 1 : 1
+    };
+
+    setProjects(prev => {
+      const next = [newProj, ...prev.filter(p => p.id !== projectId && p.sourceFile !== fileName)];
+      writeStorage(STORAGE_KEYS.projects, next);
+      return next;
+    });
+
+    // If the uploaded spreadsheet has task-like rows, also import up to 10 tasks directly
+    const importedTasks = [];
+    if (rows && rows.length > 0) {
+      const cols = Object.keys(rows[0]);
+      const titleCol = cols.find(c => /^(title|task|task_name|deliverable|action|item)$/i.test(c));
+      if (titleCol) {
+        const prioCol = cols.find(c => /^(priority)$/i.test(c));
+        const statusCol = cols.find(c => /^(status)$/i.test(c));
+        const assigneeCol = cols.find(c => /^(assigned_?to|assignee|owner)$/i.test(c));
+        const dueCol = cols.find(c => /^(due_?date|deadline|date)$/i.test(c));
+        rows.slice(0, 10).forEach((r, idx) => {
+          if (!r[titleCol]) return;
+          importedTasks.push({
+            id: `task-file-${projectId}-${idx}`,
+            projectId,
+            projectName: newProj.name,
+            title: String(r[titleCol]),
+            description: `Imported from uploaded file "${fileName}".`,
+            priority: ['high', 'medium', 'low'].includes(String(r[prioCol] || '').toLowerCase())
+              ? String(r[prioCol]).toLowerCase()
+              : 'medium',
+            status: ['pending', 'in_progress', 'completed'].includes(String(r[statusCol] || '').toLowerCase())
+              ? String(r[statusCol]).toLowerCase()
+              : 'pending',
+            assignedTo: r[assigneeCol] ? String(r[assigneeCol]) : currentUser.name,
+            dueDate: r[dueCol] ? String(r[dueCol]) : todayStr,
+            isOverdue: false,
+            sourceFile: fileName
+          });
+        });
+      }
+    }
+
+    const defaultFileTasks =
+      importedTasks.length > 0
+        ? importedTasks
+        : [
+            {
+              id: `task-file-${projectId}-1`,
+              projectId,
+              projectName: newProj.name,
+              title: fileType === 'PDF' ? `Review AI Summary: ${fileName}` : `Audit & Verify Dataset: ${fileName}`,
+              description:
+                fileType === 'PDF'
+                  ? `Inspect extracted key findings and ask grounded questions in AI Research Assistant.`
+                  : `Reviewed ${rowCount} rows (${nullsImputed} missing numerical cells imputed).`,
+              priority: 'high',
+              status: 'in_progress',
+              assignedTo: currentUser.name,
+              dueDate: todayStr,
+              isOverdue: false,
+              sourceFile: fileName
+            },
+            {
+              id: `task-file-${projectId}-2`,
+              projectId,
+              projectName: newProj.name,
+              title: `Share Report for ${fileName}`,
+              description: `Download and distribute the generated Executive Insights deliverable from Reports.`,
+              priority: 'medium',
+              status: 'pending',
+              assignedTo: currentUser.name,
+              dueDate: todayStr,
+              isOverdue: false,
+              sourceFile: fileName
+            }
+          ];
+
+    setTasks(prev => {
+      const next = [...defaultFileTasks, ...prev.filter(t => t.sourceFile !== fileName)];
+      writeStorage(STORAGE_KEYS.tasks, next);
+      return next;
+    });
+  };
+
+  const generateReportFromDatasetSnapshot = async (targetRows, targetName, targetDatasetId, targetStats, customReportName, category = "Executive MIS") => {
+    if (!targetRows || targetRows.length === 0) return null;
+
+    const baseDatasetName = (targetName || 'Uploaded_Dataset').replace(/\.(csv|xlsx|xls)$/i, '');
+    const reportFilename = customReportName || `${baseDatasetName}_MIS_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const tempId = `rep-${Date.now()}`;
+
+    const cols = Object.keys(targetRows[0] || {});
+    const targetAnalysis = analyzeDatasetRows(targetRows);
+    const numericCols = targetAnalysis.numericColumns || [];
+    const primaryMetricCol = numericCols.find((c) => !/^(id|.*_id|sr_?no|index)$/i.test(c)) || numericCols[0];
+
+    const dynamicKpis = [`Records: ${targetRows.length}`, `Columns: ${cols.length}`];
+    if (primaryMetricCol) {
+      const sum = targetRows.reduce((acc, r) => acc + (typeof r[primaryMetricCol] === 'number' ? r[primaryMetricCol] : 0), 0);
+      dynamicKpis.push(`Total ${primaryMetricCol}: ${sum.toLocaleString(undefined, { maximumFractionDigits: 1 })}`);
+    }
+    if (targetStats?.missingValuesImputed > 0) {
+      dynamicKpis.push(`Nulls Imputed: ${targetStats.missingValuesImputed}`);
+    }
+
+    const newRep = {
+      id: tempId,
+      name: reportFilename,
+      category,
+      format: reportFilename.toLowerCase().endsWith('.pdf') ? "PDF" : "Excel",
+      size: `${Math.max(1, Math.round(JSON.stringify(targetRows).length / 1024))} KB`,
+      generatedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      generatedBy: currentUser.name,
+      sourceDataset: targetName,
+      kpisIncluded: dynamicKpis,
+      rowsSnapshot: targetRows.slice(0, 500),
+      downloadCount: 0
+    };
+
+    setReports(prev => {
+      const next = [newRep, ...prev.filter(r => !(r.sourceDataset === targetName && !customReportName))];
+      writeStorage(STORAGE_KEYS.reports, next);
+      return next;
+    });
+
+    try {
+      const created = await api.generateReport({
+        report_name: reportFilename,
+        dataset_id: targetDatasetId,
+        category,
+        dataset_name: targetName,
+        rows: targetRows.slice(0, 500),
+        imputation_details: targetStats?.imputationDetails || []
+      });
+      if (created?.id) {
+        setReports(prev => {
+          const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || r.size } : r));
+          writeStorage(STORAGE_KEYS.reports, updated);
+          return updated;
+        });
+      }
+    } catch {
+      // Snapshot report already persisted in localStorage
+    }
+    return newRep;
+  };
+
   const applyDatasetRows = (rows, fileName, uploadedDatasetId = null) => {
     const cleaned = cleanDatasetRows(rows, imputationStrategy);
     const nextStats = {
@@ -460,14 +649,36 @@ export function AppProvider({ children }) {
     writeStorage(STORAGE_KEYS.isDataCleaned, true);
     writeStorage(STORAGE_KEYS.cleaningStats, nextStats);
 
+    // 1. Sync uploaded CSV/Excel into AI Research Assistant
+    const datasetDoc = buildDatasetDocumentInsight(cleaned.cleanedRows, fileName, nextStats);
+    datasetDoc.uploadedBy = currentUser.name;
+    setDocuments(prev => {
+      const next = [datasetDoc, ...prev.filter(d => d.id !== datasetDoc.id)];
+      writeStorage(STORAGE_KEYS.documents, next);
+      return next;
+    });
+    setSelectedDocId(datasetDoc.id);
+
+    // 2. Sync uploaded file into Projects & Task Management
+    syncFileAcrossProjectsAndTasks({
+      fileName,
+      fileType: fileName.toLowerCase().endsWith('.csv') ? 'CSV' : 'Excel',
+      rowCount: cleaned.currentRows,
+      nullsImputed: cleaned.missingValuesImputed,
+      rows: cleaned.cleanedRows
+    });
+
+    // 3. Auto-generate report in Reports & Executive Insights
+    generateReportFromDatasetSnapshot(cleaned.cleanedRows, fileName, uploadedDatasetId, nextStats);
+
     const summaryText = cleaned.imputationDetails
       .filter((d) => d.isNumeric)
       .map((d) => `${d.column} -> ${d.value} (${d.method})`)
       .join(', ');
     showToast(
       summaryText
-        ? `Loaded "${fileName}" (${rows.length} rows) and replaced ${cleaned.missingValuesImputed} nulls (${summaryText}).`
-        : `Loaded dataset "${fileName}" (${cleaned.currentRows} rows).`,
+        ? `Loaded "${fileName}" across all sections and replaced ${cleaned.missingValuesImputed} nulls (${summaryText}).`
+        : `Loaded "${fileName}" (${cleaned.currentRows} rows) across Analytics, AI Research, Projects & Reports.`,
       'success'
     );
   };
@@ -538,6 +749,7 @@ export function AppProvider({ children }) {
     const targetDocId = selectedDocument.id;
     const targetDocTitle = selectedDocument.title;
     const targetSummary = selectedDocument.summary;
+    const isDataset = selectedDocument.isDatasetDoc;
 
     const userMsg = {
       sender: "user",
@@ -553,14 +765,20 @@ export function AppProvider({ children }) {
     let aiResponse = "";
     let citations = [];
 
-    try {
-      const apiRes = await api.askDocumentQuestion(targetDocId, question);
-      if (apiRes?.answer) {
-        aiResponse = apiRes.answer;
-        citations = apiRes.citations || [];
+    if (isDataset) {
+      const dsRes = answerDatasetQuestion(question, dataset, datasetName || targetDocTitle, cleaningStats);
+      aiResponse = dsRes.answer;
+      citations = dsRes.citations;
+    } else {
+      try {
+        const apiRes = await api.askDocumentQuestion(targetDocId, question);
+        if (apiRes?.answer) {
+          aiResponse = apiRes.answer;
+          citations = apiRes.citations || [];
+        }
+      } catch {
+        // Fallback below using uploaded document's extracted summary
       }
-    } catch {
-      // Fallback below using uploaded document's extracted summary
     }
 
     if (!aiResponse) {
@@ -583,6 +801,12 @@ export function AppProvider({ children }) {
 
   const uploadDocument = async (file) => {
     if (!file) return;
+    const lowerName = file.name.toLowerCase();
+    if (lowerName.endsWith('.csv') || lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')) {
+      await loadUploadedDataset(file);
+      return;
+    }
+
     const fileSizeLabel = file.size >= 1024 * 1024
       ? `${(file.size / (1024 * 1024)).toFixed(1)} MB`
       : `${Math.max(1, Math.round(file.size / 1024))} KB`;
@@ -594,6 +818,7 @@ export function AppProvider({ children }) {
         uploadedDoc = {
           id: res.id,
           title: res.filename || file.name,
+          docType: 'PDF',
           size: res.file_size || fileSizeLabel,
           pages: res.page_count || 1,
           uploadedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -618,6 +843,7 @@ export function AppProvider({ children }) {
       uploadedDoc = {
         id: `doc-${Date.now()}`,
         title: file.name || "Uploaded_Document.pdf",
+        docType: 'PDF',
         size: fileSizeLabel,
         pages: 1,
         uploadedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -635,7 +861,35 @@ export function AppProvider({ children }) {
       return next;
     });
     setSelectedDocId(uploadedDoc.id);
-    showToast(`"${uploadedDoc.title}" uploaded and ready across your workspace!`);
+
+    // Sync uploaded PDF into Projects & Task Management
+    syncFileAcrossProjectsAndTasks({
+      fileName: uploadedDoc.title,
+      fileType: 'PDF'
+    });
+
+    // Also create a corresponding Executive Briefing entry in Reports & Executive Insights
+    const pdfReport = {
+      id: `rep-pdf-${uploadedDoc.id}`,
+      docId: uploadedDoc.id,
+      name: uploadedDoc.title,
+      category: 'Executive Briefing',
+      format: 'PDF',
+      size: uploadedDoc.size,
+      generatedAt: uploadedDoc.uploadedAt,
+      generatedBy: currentUser.name,
+      sourceDataset: uploadedDoc.title,
+      summarySnapshot: uploadedDoc.summary,
+      kpisIncluded: [`${uploadedDoc.pages} Pages`, 'AI Extracted Summary', 'Grounded Citations'],
+      downloadCount: 0
+    };
+    setReports(prev => {
+      const next = [pdfReport, ...prev.filter(r => r.id !== pdfReport.id)];
+      writeStorage(STORAGE_KEYS.reports, next);
+      return next;
+    });
+
+    showToast(`"${uploadedDoc.title}" uploaded and visible across AI Research, Projects & Reports!`);
   };
 
   const deleteDocument = async (docId) => {
@@ -712,71 +966,55 @@ export function AppProvider({ children }) {
       showToast('Please upload a CSV or Excel dataset first before generating a report.', 'warning');
       return;
     }
-
-    const baseDatasetName = (datasetName || 'Uploaded_Dataset').replace(/\.(csv|xlsx|xls)$/i, '');
-    const reportFilename = name || `${baseDatasetName}_MIS_Report_${new Date().toISOString().slice(0, 10)}.xlsx`;
-    const tempId = `rep-${Date.now()}`;
-
-    const cols = Object.keys(dataset[0] || {});
-    const numericCols = datasetAnalysis.numericColumns || [];
-    const primaryMetricCol = numericCols.find((c) => !/^(id|.*_id|sr_?no|index)$/i.test(c)) || numericCols[0];
-
-    const dynamicKpis = [`Records: ${dataset.length}`, `Columns: ${cols.length}`];
-    if (primaryMetricCol) {
-      const sum = dataset.reduce((acc, r) => acc + (typeof r[primaryMetricCol] === 'number' ? r[primaryMetricCol] : 0), 0);
-      dynamicKpis.push(`Total ${primaryMetricCol}: ${sum.toLocaleString(undefined, { maximumFractionDigits: 1 })}`);
-    }
-    if (cleaningStats.missingValuesImputed > 0) {
-      dynamicKpis.push(`Nulls Imputed: ${cleaningStats.missingValuesImputed}`);
-    }
-
-    const newRep = {
-      id: tempId,
-      name: reportFilename,
-      category: category,
-      format: reportFilename.toLowerCase().endsWith('.pdf') ? "PDF" : "Excel",
-      size: "Pending...",
-      generatedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      generatedBy: currentUser.name,
-      sourceDataset: datasetName,
-      kpisIncluded: dynamicKpis,
-      rowsSnapshot: dataset.slice(0, 500),
-      downloadCount: 0
-    };
-    setReports(prev => {
-      const next = [newRep, ...prev];
-      writeStorage(STORAGE_KEYS.reports, next);
-      return next;
-    });
-    showToast(`Generating report "${newRep.name}" from "${datasetName}"...`);
-
-    try {
-      const created = await api.generateReport({
-        report_name: reportFilename,
-        dataset_id: activeDatasetId,
-        category,
-        dataset_name: datasetName,
-        rows: dataset.slice(0, 500),
-        imputation_details: cleaningStats.imputationDetails || []
-      });
-      if (created?.id) {
-        setReports(prev => {
-          const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || '14.2 KB' } : r));
-          writeStorage(STORAGE_KEYS.reports, updated);
-          return updated;
-        });
-      }
-    } catch (e) {
-      setReports(prev => {
-        const updated = prev.map(r => (r.id === tempId ? { ...r, size: `${Math.max(1, Math.round(JSON.stringify(dataset).length / 1024))} KB` } : r));
-        writeStorage(STORAGE_KEYS.reports, updated);
-        return updated;
-      });
+    const createdRep = await generateReportFromDatasetSnapshot(
+      dataset,
+      datasetName,
+      activeDatasetId,
+      cleaningStats,
+      name,
+      category
+    );
+    if (createdRep) {
+      showToast(`Report "${createdRep.name}" generated from "${datasetName}"!`);
     }
   };
 
   const downloadReport = async (report) => {
     if (!report) return;
+    if (report.docId) {
+      try {
+        const res = await fetch(api.getDocumentDownloadUrl(report.docId));
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = report.name || 'Document.pdf';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+          showToast(`Downloaded ${report.name}`);
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+      if (report.summarySnapshot) {
+        const blob = new Blob([`${report.name}\n\n${report.summarySnapshot}`], { type: 'text/plain;charset=utf-8;' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${report.name}_summary.txt`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+        showToast(`Downloaded ${a.download}`);
+        return;
+      }
+    }
+
     try {
       const res = await fetch(api.getReportDownloadUrl(report.id));
       if (res.ok) {

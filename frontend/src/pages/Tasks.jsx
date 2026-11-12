@@ -12,13 +12,26 @@ import {
   User,
   SlidersHorizontal,
   ChevronDown,
-  X
+  X,
+  Upload,
+  FileSpreadsheet,
+  FileText
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { mockUsers } from '../mockData';
 
 export default function Tasks() {
-  const { projects, addProject, tasks, addTask, updateTaskStatus, currentUser, showToast } = useApp();
+  const {
+    projects,
+    addProject,
+    tasks,
+    addTask,
+    updateTaskStatus,
+    dataset,
+    datasetName,
+    documents,
+    uploadDocument
+  } = useApp();
 
   const [filterProject, setFilterProject] = useState('All');
   const [filterStatus, setFilterStatus] = useState('All');
@@ -109,7 +122,24 @@ export default function Tasks() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <label className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold cursor-pointer shadow-xs transition-colors">
+            <Upload className="w-4 h-4 text-[#2563EB]" />
+            <span>Upload File</span>
+            <input
+              type="file"
+              accept=".csv,.xlsx,.xls,.pdf"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  await uploadDocument(file);
+                  e.target.value = '';
+                }
+              }}
+            />
+          </label>
+
           <button
             onClick={() => setIsNewProjectOpen(true)}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#CBD5E1] hover:border-blue-300 text-[#1E293B] rounded-lg text-xs font-semibold shadow-xs transition-colors"
@@ -127,6 +157,37 @@ export default function Tasks() {
           </button>
         </div>
       </div>
+
+      {/* Uploaded Files Linked to Projects & Tasks */}
+      {(dataset.length > 0 || documents.length > 0) && (
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-2.5">
+            <span className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">
+              Uploaded Files in Workspace
+            </span>
+            <span className="text-[11px] text-[#64748B]">
+              Click a project card below to filter tasks linked to your uploaded files
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {dataset.length > 0 && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-800">
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                {datasetName} ({dataset.length} rows)
+              </span>
+            )}
+            {documents.filter(d => !d.isDatasetDoc).map((doc) => (
+              <span
+                key={doc.id}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-red-50 border border-red-200 text-xs font-semibold text-red-700"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                {doc.title} ({doc.pages}p)
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Projects Overview Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
