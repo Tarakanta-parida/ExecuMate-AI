@@ -674,6 +674,8 @@ export default function Analytics() {
                   }
                 />
                 <Tooltip
+                  wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
+                  allowEscapeViewBox={{ x: true, y: true }}
                   content={renderCartesianTooltip((v) =>
                     isStandardSchema ? `$${Number(v).toLocaleString()}` : Number(v).toLocaleString()
                   )}
@@ -701,7 +703,7 @@ export default function Analytics() {
             <p className="text-xs text-[#64748B] mb-2">
               {isStandardSchema ? 'Mix of Cloud SaaS vs Hardware vs Services' : 'Top segment breakdown'}
             </p>
-            <div className="h-48 w-full relative flex items-center justify-center">
+            <div className="h-44 w-full flex items-center justify-center">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -710,8 +712,8 @@ export default function Analytics() {
                     nameKey="name"
                     cx="50%"
                     cy="50%"
-                    innerRadius={48}
-                    outerRadius={74}
+                    innerRadius={45}
+                    outerRadius={72}
                     paddingAngle={3}
                     onMouseEnter={(_, idx) => setHoveredPieIndex(idx)}
                     onMouseLeave={() => setHoveredPieIndex(null)}
@@ -725,21 +727,45 @@ export default function Analytics() {
                       />
                     ))}
                   </Pie>
-                  <Tooltip content={renderPieTooltip} />
+                  <Tooltip
+                    wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
+                    allowEscapeViewBox={{ x: true, y: true }}
+                    content={renderPieTooltip}
+                  />
                 </PieChart>
               </ResponsiveContainer>
+            </div>
 
-              {/* Center label displaying active pointed slice name & exact number */}
-              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center px-6">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-[#64748B] truncate max-w-[82px]">
-                  {activePieItem ? activePieItem.name : 'Total'}
-                </span>
-                <span className="text-xs font-bold text-[#1E293B] truncate max-w-[88px]">
-                  {isStandardSchema
-                    ? `$${Math.round(activePieItem ? activePieItem.value : pieTotal).toLocaleString()}`
-                    : (activePieItem ? activePieItem.value : pieTotal).toLocaleString()}
-                </span>
-              </div>
+            {/* Clean badge outside the Donut chart showing pointed segment name, number & % */}
+            <div className="mt-2 mb-3 px-3 py-1.5 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between gap-2 text-xs min-h-[32px]">
+              {activePieItem ? (
+                <>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: COLORS[hoveredPieIndex % COLORS.length] }}
+                    />
+                    <span className="font-bold text-[#1E293B] truncate">{activePieItem.name}</span>
+                  </div>
+                  <span className="font-bold text-[#2563EB] shrink-0">
+                    {isStandardSchema
+                      ? `$${activePieItem.value.toLocaleString()}`
+                      : activePieItem.value.toLocaleString()}{' '}
+                    <span className="text-[#64748B] font-medium">
+                      ({pieTotal > 0 ? ((activePieItem.value / pieTotal) * 100).toFixed(1) : '0.0'}%)
+                    </span>
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-[#64748B] font-medium">Total ({categoryChartData.length} segments)</span>
+                  <span className="font-bold text-[#1E293B]">
+                    {isStandardSchema
+                      ? `$${Math.round(pieTotal).toLocaleString()}`
+                      : pieTotal.toLocaleString()}
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
@@ -808,6 +834,8 @@ export default function Analytics() {
                   }}
                 />
                 <Tooltip
+                  wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
+                  allowEscapeViewBox={{ x: true, y: true }}
                   content={renderCartesianTooltip((v) =>
                     `${businessImpactCharts.trend.isCurrency ? '$' : ''}${Number(v).toLocaleString()}`
                   )}
@@ -875,6 +903,8 @@ export default function Analytics() {
                   tickFormatter={(v) => `${v}${businessImpactCharts.impact.lineSuffix}`}
                 />
                 <Tooltip
+                  wrapperStyle={{ zIndex: 50, pointerEvents: 'none' }}
+                  allowEscapeViewBox={{ x: true, y: true }}
                   content={renderCartesianTooltip((v, name) =>
                     name === businessImpactCharts.impact.lineLabel
                       ? `${Number(v).toLocaleString()}${businessImpactCharts.impact.lineSuffix}`
