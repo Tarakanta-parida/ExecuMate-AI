@@ -566,3 +566,256 @@ export function buildDatasetKpiCards(rows, columns = [], numericColumns = []) {
 
   return cards;
 }
+
+function extractTimeBucket(rawVal) {
+  if (!rawVal) return null;
+  const str = String(rawVal).trim();
+  const isoMatch = /^(\d{4})-(\d{2})(?:-\d{2})?/.exec(str);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}`;
+  const parsed = Date.parse(str);
+  if (!Number.isNaN(parsed)) {
+    const d = new Date(parsed);
+    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${d.getUTCFullYear()}-${m}`;
+  }
+  return null;
+}
+
+/**
+ * Build data for two distinct business-impact charts:
+ * 1) AreaChart: Time-series Financial Value & Cost Savings / Cost Trend
+ * 2) ComposedChart (Bar + Line): Operational Quality Risk / Margin / Fulfillment Impact
+ */
+export function buildBusinessImpactCharts(rows, columns = [], numericColumns = [], preferredGroupCol = '') {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const metrics = numericColumns.filter((c) => !/^(id|.*_id|sr_?no|index|po_?id)$/i.test(c));
+  const activeMetrics = metrics.length > 0 ? metrics : numericColumns;
+
+  const numSet = new Set(numericColumns);
+  const textCols = columns.filter(
+    (c) => !numSet.has(c) && !/^(id|.*_id|po_?id|sr_?no|index)$/i.test(c) && !/date|time/i.test(c)
+  );
+
+  const qtyCol = activeMetrics.find((c) => /quantity|qty|units|volume|count/i.test(c) && !/defect|return|error/i.test(c));
+  const revCol = activeMetrics.find((c) => /revenue|sales|total_?amount|amount|spend|income|turnover|gmv/i.test(c));
+  const costCol = activeMetrics.find((c) => /^cost$|total_?cost|expense/i.test(c));
+  const unitPriceCol = activeMetrics.find((c) => /unit_?price|list_?price/i.test(c));
+  const negPriceCol = activeMetrics.find((c) => /negotiated_?price|sale_?price|discounted_?price/i.test(c));
+  const priceCol = negPriceCol || unitPriceCol || activeMetrics.find((c) => /price|rate|salary|budget/i.test(c));
+  const defectCol = activeMetrics.find((c) => /defect|return|error|reject|loss/i.test(c));
+  const marginCol = activeMetrics.find((c) => /margin|profit|discount|pct|percent/i.test(c));
+  const statusCol = textCols.find((c) => /order_?status|status|compliance|tier|region/i.test(c));
+  const dateCol = columns.find((c) => /order_?date|date|month|period|created/i.test(c));
+
+  // --- Chart 3: AreaChart (Financial Value & Savings / Cost Trend) ---
+  let trendTitle = 'Business Value Trend';
+  let trendSubtitle = 'Financial impact over time';
+  let primaryLabel = 'Value';
+  let secondaryLabel = null;
+  let trendIsCurrency = false;
+
+  const hasSavingsPair = Boolean(qtyCol && unitPriceCol && negPriceCol);
+  const hasRevCostPair = Boolean(revCol && costCol);
+
+  if (hasSavingsPair) {
+    trendTitle = 'Contract Spend & Negotiation Savings Trend';
+    trendSubtitle = 'Negotiated contract value vs cost savings achieved';
+    primaryLabel = 'Contract Value';
+    secondaryLabel = 'Negotiated Savings';
+    trendIsCurrency = true;
+  } else if (hasRevCostPair) {
+    trendTitle = 'Revenue vs Cost Trend';
+    trendSubtitle = 'Gross revenue compared against operating cost';
+    primaryLabel = 'Revenue';
+    secondaryLabel = 'Cost';
+    trendIsCurrency = true;
+  } else if (revCol) {
+    trendTitle = `${formatColumnTitle(revCol)} Performance Trend`;
+    trendSubtitle = 'Cumulative revenue impact across periods';
+    primaryLabel = formatColumnTitle(revCol);
+    trendIsCurrency = true;
+  } else if (qtyCol && priceCol) {
+    trendTitle = 'Estimated Revenue Trend';
+    trendSubtitle = 'Derived transaction value over time';
+    primaryLabel = 'Estimated Revenue';
+    trendIsCurrency = true;
+  } else if (activeMetrics.length > 0) {
+    const m0 = activeMetrics[0];
+    const m1 = activeMetrics[1] || null;
+    trendTitle = m1
+      ? `${formatColumnTitle(m0)} vs ${formatColumnTitle(m1)} Trend`
+      : `${formatColumnTitle(m0)} Trend`;
+    trendSubtitle = 'Performance trajectory across dataset';
+    primaryLabel = formatColumnTitle(m0);
+    secondaryLabel = m1 ? formatColumnTitle(m1) : null;
+    trendIsCurrency = isMoneyColumn(m0);
+  }
+
+  const trendBuckets = {};
+  const useDateBuckets = Boolean(
+    dateCol && safeRows.some((r) => extractTimeBucket(r[dateCol]) !== null)
+  );
+  const fallbackTrendGroup = textCols[0] || columns[0] || 'Segment';
+
+  for (const r of safeRows) {
+    const bucket = useDateBuckets
+      ? (extractTimeBucket(r[dateCol]) || 'Unknown')
+      : String(r[fallbackTrendGroup] ?? 'Segment');
+    if (bucket === 'Unknown' && useDateBuckets) continue;
+
+    if (!trendBuckets[bucket]) {
+      trendBuckets[bucket] = { label: bucket, primary: 0, secondary: 0 };
+    }
+
+    if (hasSavingsPair) {
+      const q = typeof r[qtyCol] === 'number' ? r[qtyCol] : 0;
+      const up = typeof r[unitPriceCol] === 'number' ? r[unitPriceCol] : 0;
+      const np = typeof r[negPriceCol] === 'number' ? r[negPriceCol] : up;
+      trendBuckets[bucket].primary += q * np;
+      trendBuckets[bucket].secondary += q * Math.max(0, up - np);
+    } else if (hasRevCostPair) {
+      trendBuckets[bucket].primary += typeof r[revCol] === 'number' ? r[revCol] : 0;
+      trendBuckets[bucket].secondary += typeof r[costCol] === 'number' ? r[costCol] : 0;
+    } else if (revCol) {
+      trendBuckets[bucket].primary += typeof r[revCol] === 'number' ? r[revCol] : 0;
+    } else if (qtyCol && priceCol) {
+      const q = typeof r[qtyCol] === 'number' ? r[qtyCol] : 0;
+      const p = typeof r[priceCol] === 'number' ? r[priceCol] : 0;
+      trendBuckets[bucket].primary += q * p;
+    } else if (activeMetrics.length > 0) {
+      const m0 = activeMetrics[0];
+      const m1 = activeMetrics[1];
+      trendBuckets[bucket].primary += typeof r[m0] === 'number' ? r[m0] : 0;
+      if (m1) {
+        trendBuckets[bucket].secondary += typeof r[m1] === 'number' ? r[m1] : 0;
+      }
+    }
+  }
+
+  let trendData = Object.values(trendBuckets).map((item) => ({
+    label: item.label,
+    primary: Number(item.primary.toFixed(2)),
+    secondary: secondaryLabel ? Number(item.secondary.toFixed(2)) : undefined
+  }));
+
+  if (useDateBuckets) {
+    trendData.sort((a, b) => a.label.localeCompare(b.label));
+    if (trendData.length > 18) {
+      trendData = trendData.slice(-18);
+    }
+  } else {
+    trendData.sort((a, b) => b.primary - a.primary);
+    trendData = trendData.slice(0, 8);
+  }
+
+  // --- Chart 4: ComposedChart (Bar + Line Dual-Axis Risk & Operational Impact) ---
+  const impactGroupCol =
+    (defectCol && textCols[0]) ||
+    statusCol ||
+    (preferredGroupCol && textCols.includes(preferredGroupCol) && preferredGroupCol) ||
+    textCols[0] ||
+    columns[0] ||
+    'Category';
+
+  let impactTitle = 'Operational Risk & Efficiency Impact';
+  let impactSubtitle = 'Volume vs efficiency rate';
+  let barLabel = 'Impact';
+  let lineLabel = 'Rate';
+  let barIsCurrency = false;
+  let lineSuffix = '';
+
+  const impactGroups = {};
+  for (const r of safeRows) {
+    const key = r[impactGroupCol] !== null && r[impactGroupCol] !== undefined ? String(r[impactGroupCol]) : 'Unknown';
+    if (!impactGroups[key]) {
+      impactGroups[key] = { label: key, count: 0, qtySum: 0, defectSum: 0, revSum: 0, marginSum: 0, m0Sum: 0, m1Sum: 0 };
+    }
+    const g = impactGroups[key];
+    g.count += 1;
+    if (qtyCol && typeof r[qtyCol] === 'number') g.qtySum += r[qtyCol];
+    if (defectCol && typeof r[defectCol] === 'number') g.defectSum += r[defectCol];
+    if (revCol && typeof r[revCol] === 'number') {
+      g.revSum += r[revCol];
+    } else if (qtyCol && priceCol) {
+      const q = typeof r[qtyCol] === 'number' ? r[qtyCol] : 0;
+      const p = typeof r[priceCol] === 'number' ? r[priceCol] : 0;
+      g.revSum += q * p;
+    }
+    if (marginCol && typeof r[marginCol] === 'number') g.marginSum += r[marginCol];
+    if (activeMetrics[0] && typeof r[activeMetrics[0]] === 'number') g.m0Sum += r[activeMetrics[0]];
+    if (activeMetrics[1] && typeof r[activeMetrics[1]] === 'number') g.m1Sum += r[activeMetrics[1]];
+  }
+
+  let impactData = [];
+  if (defectCol && qtyCol) {
+    impactTitle = `Quality Risk & Defect Rate by ${formatColumnTitle(impactGroupCol)}`;
+    impactSubtitle = `${formatColumnTitle(defectCol)} (bars) vs Defect Rate % (line)`;
+    barLabel = formatColumnTitle(defectCol);
+    lineLabel = 'Defect Rate';
+    lineSuffix = '%';
+    impactData = Object.values(impactGroups).map((g) => ({
+      label: g.label,
+      barValue: Number(g.defectSum.toFixed(1)),
+      lineValue: g.qtySum > 0 ? Number(((g.defectSum / g.qtySum) * 100).toFixed(2)) : 0
+    }));
+  } else if (marginCol && (revCol || qtyCol)) {
+    impactTitle = `Revenue vs Margin Efficiency by ${formatColumnTitle(impactGroupCol)}`;
+    impactSubtitle = 'Total revenue (bars) vs average margin % (line)';
+    barLabel = revCol ? formatColumnTitle(revCol) : 'Revenue';
+    lineLabel = `Avg ${formatColumnTitle(marginCol)}`;
+    barIsCurrency = true;
+    lineSuffix = '%';
+    impactData = Object.values(impactGroups).map((g) => ({
+      label: g.label,
+      barValue: Number(g.revSum.toFixed(2)),
+      lineValue: g.count > 0 ? Number((g.marginSum / g.count).toFixed(1)) : 0
+    }));
+  } else if (revCol || (qtyCol && priceCol)) {
+    impactTitle = `Business Value & Order Volume by ${formatColumnTitle(impactGroupCol)}`;
+    impactSubtitle = 'Total value (bars) vs order count (line)';
+    barLabel = 'Total Value';
+    lineLabel = 'Orders';
+    barIsCurrency = true;
+    impactData = Object.values(impactGroups).map((g) => ({
+      label: g.label,
+      barValue: Number(g.revSum.toFixed(2)),
+      lineValue: g.count
+    }));
+  } else {
+    const m0 = activeMetrics[0] || 'Value';
+    const m1 = activeMetrics[1] || activeMetrics[0] || 'Average';
+    impactTitle = `${formatColumnTitle(m0)} & Avg ${formatColumnTitle(m1)} by ${formatColumnTitle(impactGroupCol)}`;
+    impactSubtitle = 'Total volume (bars) vs per-record average (line)';
+    barLabel = formatColumnTitle(m0);
+    lineLabel = `Avg ${formatColumnTitle(m1)}`;
+    impactData = Object.values(impactGroups).map((g) => ({
+      label: g.label,
+      barValue: Number(g.m0Sum.toFixed(2)),
+      lineValue: g.count > 0 ? Number((g.m1Sum / g.count).toFixed(1)) : 0
+    }));
+  }
+
+  impactData = impactData
+    .sort((a, b) => b.barValue - a.barValue)
+    .slice(0, 8);
+
+  return {
+    trend: {
+      title: trendTitle,
+      subtitle: trendSubtitle,
+      primaryLabel,
+      secondaryLabel,
+      isCurrency: trendIsCurrency,
+      data: trendData
+    },
+    impact: {
+      title: impactTitle,
+      subtitle: impactSubtitle,
+      barLabel,
+      lineLabel,
+      barIsCurrency,
+      lineSuffix,
+      data: impactData
+    }
+  };
+}

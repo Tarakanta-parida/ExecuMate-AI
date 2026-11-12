@@ -32,10 +32,14 @@ import {
   PieChart,
   Pie,
   Cell,
-  Legend
+  Legend,
+  AreaChart,
+  Area,
+  ComposedChart,
+  Line
 } from 'recharts';
 import { useApp } from '../context/AppContext';
-import { buildDatasetKpiCards } from '../utils/dataCleaning';
+import { buildDatasetKpiCards, buildBusinessImpactCharts } from '../utils/dataCleaning';
 
 const KPI_ICON_MAP = {
   revenue: { Icon: DollarSign, badgeClass: 'bg-emerald-50 text-emerald-600' },
@@ -133,6 +137,10 @@ export default function Analytics() {
   const dynamicKpiCards = useMemo(() => {
     return buildDatasetKpiCards(slicedDataset, dynamicColumns, datasetAnalysis.numericColumns);
   }, [slicedDataset, dynamicColumns, datasetAnalysis.numericColumns]);
+
+  const businessImpactCharts = useMemo(() => {
+    return buildBusinessImpactCharts(slicedDataset, dynamicColumns, datasetAnalysis.numericColumns, slicerColumn);
+  }, [slicedDataset, dynamicColumns, datasetAnalysis.numericColumns, slicerColumn]);
 
   const customProfile = useMemo(() => {
     if (isStandardSchema || !slicedDataset || slicedDataset.length === 0) return null;
@@ -678,6 +686,148 @@ export default function Analytics() {
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Additional Business Impact Charts (Area Trend + Dual-Axis Composed Risk/Efficiency) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Chart 3: Area Chart — Business Value & Cost Savings / Cost Trend */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-4">
+            <div>
+              <h2 className="text-sm font-bold text-[#1E293B]">{businessImpactCharts.trend.title}</h2>
+              <p className="text-xs text-[#64748B]">{businessImpactCharts.trend.subtitle}</p>
+            </div>
+            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded shrink-0">
+              Business Impact
+            </span>
+          </div>
+          <div className="h-60 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={businessImpactCharts.trend.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="impactPrimaryGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#2563EB" stopOpacity={0.28} />
+                    <stop offset="95%" stopColor="#2563EB" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="impactSecondaryGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#16A34A" stopOpacity={0.32} />
+                    <stop offset="95%" stopColor="#16A34A" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                <XAxis dataKey="label" stroke="#94A3B8" fontSize={11} tickLine={false} />
+                <YAxis
+                  stroke="#94A3B8"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(v) => {
+                    const prefix = businessImpactCharts.trend.isCurrency ? '$' : '';
+                    if (v >= 1000000) return `${prefix}${(v / 1000000).toFixed(1)}M`;
+                    if (v >= 1000) return `${prefix}${(v / 1000).toFixed(0)}k`;
+                    return `${prefix}${v}`;
+                  }}
+                />
+                <Tooltip
+                  formatter={(v, name) => [
+                    `${businessImpactCharts.trend.isCurrency ? '$' : ''}${Number(v).toLocaleString()}`,
+                    name
+                  ]}
+                  contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                <Area
+                  type="monotone"
+                  dataKey="primary"
+                  name={businessImpactCharts.trend.primaryLabel}
+                  stroke="#2563EB"
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#impactPrimaryGrad)"
+                />
+                {businessImpactCharts.trend.secondaryLabel && (
+                  <Area
+                    type="monotone"
+                    dataKey="secondary"
+                    name={businessImpactCharts.trend.secondaryLabel}
+                    stroke="#16A34A"
+                    strokeWidth={2}
+                    fillOpacity={1}
+                    fill="url(#impactSecondaryGrad)"
+                  />
+                )}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Chart 4: Composed Dual-Axis Chart (Bar + Line) — Quality Risk / Efficiency Impact */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-2 mb-4">
+            <div>
+              <h2 className="text-sm font-bold text-[#1E293B]">{businessImpactCharts.impact.title}</h2>
+              <p className="text-xs text-[#64748B]">{businessImpactCharts.impact.subtitle}</p>
+            </div>
+            <span className="text-xs font-semibold text-amber-700 bg-amber-50 px-2 py-1 rounded shrink-0">
+              Risk &amp; Efficiency
+            </span>
+          </div>
+          <div className="h-60 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={businessImpactCharts.impact.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F1F5F9" />
+                <XAxis dataKey="label" stroke="#94A3B8" fontSize={11} tickLine={false} />
+                <YAxis
+                  yAxisId="left"
+                  stroke="#94A3B8"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(v) => {
+                    const prefix = businessImpactCharts.impact.barIsCurrency ? '$' : '';
+                    if (v >= 1000000) return `${prefix}${(v / 1000000).toFixed(1)}M`;
+                    if (v >= 1000) return `${prefix}${(v / 1000).toFixed(0)}k`;
+                    return `${prefix}${v}`;
+                  }}
+                />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  stroke="#94A3B8"
+                  fontSize={11}
+                  tickLine={false}
+                  tickFormatter={(v) => `${v}${businessImpactCharts.impact.lineSuffix}`}
+                />
+                <Tooltip
+                  formatter={(v, name) => {
+                    if (name === businessImpactCharts.impact.lineLabel) {
+                      return [`${Number(v).toLocaleString()}${businessImpactCharts.impact.lineSuffix}`, name];
+                    }
+                    return [`${businessImpactCharts.impact.barIsCurrency ? '$' : ''}${Number(v).toLocaleString()}`, name];
+                  }}
+                  contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
+                />
+                <Legend wrapperStyle={{ fontSize: '11px' }} />
+                <Bar
+                  yAxisId="left"
+                  dataKey="barValue"
+                  name={businessImpactCharts.impact.barLabel}
+                  fill="#D97706"
+                  radius={[4, 4, 0, 0]}
+                  barSize={28}
+                />
+                <Line
+                  yAxisId="right"
+                  type="monotone"
+                  dataKey="lineValue"
+                  name={businessImpactCharts.impact.lineLabel}
+                  stroke="#7C3AED"
+                  strokeWidth={2.5}
+                  dot={{ r: 4, fill: '#7C3AED' }}
+                  activeDot={{ r: 6 }}
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
           </div>
         </div>
       </div>
