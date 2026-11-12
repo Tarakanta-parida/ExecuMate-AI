@@ -98,10 +98,38 @@ def generate_excel_mis_report(
             ws_kpi.cell(row=current_row, column=5, value=item.get("count", item.get("nulls_replaced", 0))).border = border_thin
             current_row += 1
 
+    # Segment Breakdown Table (First categorical column vs primary numeric column)
+    text_cols = [c for c in df.columns if c not in numeric_cols and not any(tok in str(c).lower() for tok in ("date", "time", "id"))]
+    primary_metric = (non_id_numeric or numeric_cols)[0] if (non_id_numeric or numeric_cols) else None
+    if text_cols and primary_metric:
+        group_col = text_cols[0]
+        grouped = (
+            df.groupby(group_col, dropna=False)[primary_metric]
+            .agg(["count", "sum", "mean"])
+            .sort_values(by="sum", ascending=False)
+            .head(10)
+        )
+        if not grouped.empty:
+            current_row += 1
+            ws_kpi[f"B{current_row}"] = f"Top Breakdown: {primary_metric} by {group_col}"
+            ws_kpi[f"B{current_row}"].font = section_font
+            current_row += 1
+            for col_idx, heading in enumerate([str(group_col), "Records", f"Total {primary_metric}", f"Avg {primary_metric}"], start=2):
+                cell = ws_kpi.cell(row=current_row, column=col_idx, value=heading)
+                cell.font = header_font
+                cell.fill = header_fill
+            current_row += 1
+            for seg_name, row_stats in grouped.iterrows():
+                ws_kpi.cell(row=current_row, column=2, value=str(seg_name)).border = border_thin
+                ws_kpi.cell(row=current_row, column=3, value=int(row_stats["count"])).border = border_thin
+                ws_kpi.cell(row=current_row, column=4, value=round(float(row_stats["sum"]), 2)).border = border_thin
+                ws_kpi.cell(row=current_row, column=5, value=round(float(row_stats["mean"]), 2)).border = border_thin
+                current_row += 1
+
     ws_kpi.column_dimensions["B"].width = 34
     ws_kpi.column_dimensions["C"].width = 26
-    ws_kpi.column_dimensions["D"].width = 22
-    ws_kpi.column_dimensions["E"].width = 18
+    ws_kpi.column_dimensions["D"].width = 24
+    ws_kpi.column_dimensions["E"].width = 22
 
     # Sheet 2: Cleaned Data
     ws_data = wb.create_sheet(title="Detailed Cleaned Data")
@@ -121,7 +149,7 @@ def generate_excel_mis_report(
     for col in ws_data.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
         col_letter = col[0].column_letter
-        ws_data.column_dimensions[col_letter].width = max(max_len + 4, 12)
+        ws_data.column_dimensions[col_letter].width = min(max(max_len + 4, 12), 45)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     wb.save(output_path)

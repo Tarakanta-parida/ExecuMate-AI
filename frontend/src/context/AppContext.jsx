@@ -591,7 +591,7 @@ export function AppProvider({ children }) {
       generatedBy: currentUser.name,
       sourceDataset: targetName,
       kpisIncluded: dynamicKpis,
-      rowsSnapshot: targetRows.slice(0, 500),
+      rowsSnapshot: targetRows.slice(0, 200),
       downloadCount: 0
     };
 
@@ -601,16 +601,18 @@ export function AppProvider({ children }) {
       return next;
     });
 
+    let finalRep = { ...newRep, rowsSnapshot: targetRows };
     try {
       const created = await api.generateReport({
         report_name: reportFilename,
         dataset_id: targetDatasetId,
         category,
         dataset_name: targetName,
-        rows: targetRows.slice(0, 500),
+        rows: targetRows,
         imputation_details: targetStats?.imputationDetails || []
       });
       if (created?.id) {
+        finalRep = { ...finalRep, id: created.id, size: created.file_size || finalRep.size };
         setReports(prev => {
           const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || r.size } : r));
           writeStorage(STORAGE_KEYS.reports, updated);
@@ -620,7 +622,7 @@ export function AppProvider({ children }) {
     } catch {
       // Snapshot report already persisted in localStorage
     }
-    return newRep;
+    return finalRep;
   };
 
   const applyDatasetRows = (rows, fileName, uploadedDatasetId = null) => {
@@ -961,10 +963,48 @@ export function AppProvider({ children }) {
     return Array.isArray(saved) ? saved.filter(r => !deletedIds.has(r.id)) : [];
   });
 
-  const generateReportFromData = async (name, category = "Executive MIS") => {
+  const exportRowsAsCsv = (rowsToExport, filename) => {
+    if (!rowsToExport || rowsToExport.length === 0) {
+      showToast('No dataset rows available to export.', 'warning');
+      return false;
+    }
+    const headers = Object.keys(rowsToExport[0]);
+    const csvLines = [
+      headers.join(','),
+      ...rowsToExport.map(row =>
+        headers.map(h => {
+          const val = row[h] ?? '';
+          const str = String(val);
+          return str.includes(',') || str.includes('"') || str.includes('\n') ? `"${str.replace(/"/g, '""')}"` : str;
+        }).join(',')
+      )
+    ];
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+    showToast(`Downloaded ${filename}`);
+    return true;
+  };
+
+  const exportCleanedCsv = (customRows, customName) => {
+    const rowsToExport = customRows && customRows.length > 0 ? customRows : dataset;
+    const baseName = (customName || datasetName || 'Analyzed_Dataset').replace(/\.(csv|xlsx|xls)$/i, '');
+    exportRowsAsCsv(rowsToExport, `${baseName}_cleaned.csv`);
+  };
+
+  const generateReportFromData = async (name, category = "Executive MIS", autoDownload = false) => {
     if (!dataset || dataset.length === 0) {
       showToast('Please upload a CSV or Excel dataset first before generating a report.', 'warning');
       return;
+    }
+    if (autoDownload) {
+      showToast(`Preparing analyzed report for "${datasetName}"...`, 'info');
     }
     const createdRep = await generateReportFromDatasetSnapshot(
       dataset,
@@ -975,7 +1015,11 @@ export function AppProvider({ children }) {
       category
     );
     if (createdRep) {
-      showToast(`Report "${createdRep.name}" generated from "${datasetName}"!`);
+      if (autoDownload) {
+        await downloadReport(createdRep);
+      } else {
+        showToast(`Report "${createdRep.name}" generated from "${datasetName}"!`);
+      }
     }
   };
 
@@ -1035,29 +1079,7 @@ export function AppProvider({ children }) {
     }
 
     const rowsToExport = report.rowsSnapshot?.length ? report.rowsSnapshot : dataset;
-    if (rowsToExport && rowsToExport.length > 0) {
-      const headers = Object.keys(rowsToExport[0]);
-      const csvLines = [
-        headers.join(','),
-        ...rowsToExport.map(row =>
-          headers.map(h => {
-            const val = row[h] ?? '';
-            const str = String(val);
-            return str.includes(',') || str.includes('"') ? `"${str.replace(/"/g, '""')}"` : str;
-          }).join(',')
-        )
-      ];
-      const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = (report.name || 'Report').replace(/\.(xlsx|xls|pdf)$/i, '') + '.csv';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      showToast(`Downloaded ${a.download}`);
-    } else {
+    if (!exportRowsAsCsv(rowsToExport, (report.name || 'Report').replace(/\.(xlsx|xls|pdf)$/i, '') + '.csv')) {
       showToast('Report file is no longer available on the server.', 'warning');
     }
   };
@@ -1127,6 +1149,7 @@ export function AppProvider({ children }) {
         reports,
         generateReportFromData,
         downloadReport,
+        exportCleanedCsv,
         deleteReport
       }}
     >
