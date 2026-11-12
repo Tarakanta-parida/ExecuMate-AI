@@ -22,6 +22,30 @@ import {
 
 const AppContext = createContext();
 
+const STORAGE_KEYS = {
+  reports: 'execumate_reports_v1',
+  deletedReportIds: 'execumate_deleted_report_ids_v1',
+  documents: 'execumate_documents_v1',
+  deletedDocIds: 'execumate_deleted_doc_ids_v1'
+};
+
+function readStorage(key, fallback) {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw !== null ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorage(key, value) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 export function AppProvider({ children }) {
   // User Profiles & Active User
   const [users, setUsers] = useState(mockUsers);
@@ -149,18 +173,28 @@ export function AppProvider({ children }) {
       try {
         const liveReports = await api.getReports();
         if (Array.isArray(liveReports) && liveReports.length > 0) {
-          const formattedReports = liveReports.map(r => ({
-            id: r.id,
-            name: r.report_name,
-            category: r.category,
-            format: "Excel",
-            size: r.file_size || "1.2 MB",
-            generatedAt: r.generated_at ? r.generated_at.split('T')[0] : "2026-11-10",
-            generatedBy: "ExecuMate Engine",
-            kpisIncluded: ["Cleaned Ledger Data", "Regional Margin", "Executive Summary"],
-            downloadCount: 1
-          }));
-          setReports(prev => [...formattedReports, ...prev.filter(pr => !formattedReports.some(fr => fr.id === pr.id))]);
+          const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedReportIds, []));
+          const formattedReports = liveReports
+            .filter(r => !deletedIds.has(r.id))
+            .map(r => ({
+              id: r.id,
+              name: r.report_name,
+              category: r.category,
+              format: r.report_name?.toLowerCase().endsWith('.pdf') ? "PDF" : "Excel",
+              size: r.file_size || "1.2 MB",
+              generatedAt: r.generated_at ? r.generated_at.split('T')[0] : "2026-11-10",
+              generatedBy: "ExecuMate Engine",
+              kpisIncluded: ["Cleaned Ledger Data", "Regional Margin", "Executive Summary"],
+              downloadCount: 1
+            }));
+          setReports(prev => {
+            const merged = [
+              ...formattedReports,
+              ...prev.filter(pr => !deletedIds.has(pr.id) && !formattedReports.some(fr => fr.id === pr.id))
+            ];
+            writeStorage(STORAGE_KEYS.reports, merged);
+            return merged;
+          });
         }
       } catch (err) {
         // Keeps fallback
@@ -352,12 +386,17 @@ export function AppProvider({ children }) {
   };
 
   // AI Research Assistant Module
-  const [documents, setDocuments] = useState(mockDocuments);
-  const [selectedDocId, setSelectedDocId] = useState(mockDocuments[0].id);
+  const [documents, setDocuments] = useState(() => {
+    const saved = readStorage(STORAGE_KEYS.documents, null);
+    const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedDocIds, []));
+    const base = saved !== null ? saved : mockDocuments;
+    return base.filter(d => !deletedIds.has(d.id));
+  });
+  const [selectedDocId, setSelectedDocId] = useState(() => documents[0]?.id || null);
   const [conversations, setConversations] = useState(mockChatConversations);
 
   const selectedDocument = useMemo(() => {
-    return documents.find(d => d.id === selectedDocId) || documents[0];
+    return documents.find(d => d.id === selectedDocId) || documents[0] || null;
   }, [documents, selectedDocId]);
 
   const activeMessages = useMemo(() => {
@@ -365,7 +404,7 @@ export function AppProvider({ children }) {
   }, [conversations, selectedDocId]);
 
   const askDocumentQuestion = (question) => {
-    if (!question.trim()) return;
+    if (!question.trim() || !selectedDocument) return;
 
     const userMsg = {
       sender: "user",
@@ -429,18 +468,29 @@ export function AppProvider({ children }) {
         "Share synthesis with department heads."
       ]
     };
-    setDocuments([newDoc, ...documents]);
+    setDocuments(prev => {
+      const next = [newDoc, ...prev];
+      writeStorage(STORAGE_KEYS.documents, next);
+      return next;
+    });
     setSelectedDocId(newDoc.id);
     showToast(`"${newDoc.title}" uploaded and indexed successfully!`);
   };
 
   const deleteDocument = async (docId) => {
     const docToDelete = documents.find(d => d.id === docId);
-    const remaining = documents.filter(d => d.id !== docId);
-    setDocuments(remaining);
-    if (selectedDocId === docId && remaining.length > 0) {
-      setSelectedDocId(remaining[0].id);
-    }
+    const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedDocIds, []));
+    deletedIds.add(docId);
+    writeStorage(STORAGE_KEYS.deletedDocIds, Array.from(deletedIds));
+
+    setDocuments(prev => {
+      const remaining = prev.filter(d => d.id !== docId);
+      writeStorage(STORAGE_KEYS.documents, remaining);
+      if (selectedDocId === docId) {
+        setSelectedDocId(remaining[0]?.id || null);
+      }
+      return remaining;
+    });
     showToast(`Document "${docToDelete?.title || 'PDF'}" removed.`, 'info');
 
     try {
@@ -490,26 +540,43 @@ export function AppProvider({ children }) {
   };
 
   // Reports
-  const [reports, setReports] = useState(mockGeneratedReports);
+  const [reports, setReports] = useState(() => {
+    const saved = readStorage(STORAGE_KEYS.reports, null);
+    const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedReportIds, []));
+    const base = saved !== null ? saved : mockGeneratedReports;
+    return base.filter(r => !deletedIds.has(r.id));
+  });
 
   const generateReportFromData = async (name, category = "Executive MIS") => {
     const reportFilename = name || `Executive_MIS_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const tempId = `rep-${Date.now()}`;
     const newRep = {
-      id: `rep-${Date.now()}`,
+      id: tempId,
       name: reportFilename,
       category: category,
-      format: "Excel",
+      format: reportFilename.toLowerCase().endsWith('.pdf') ? "PDF" : "Excel",
       size: "1.2 MB",
       generatedAt: new Date().toLocaleDateString() + " " + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       generatedBy: currentUser.name,
       kpisIncluded: [`Cleaned records: ${dataset.length}`, "Regional Summary", "Gross Margin Analysis"],
       downloadCount: 0
     };
-    setReports([newRep, ...reports]);
+    setReports(prev => {
+      const next = [newRep, ...prev];
+      writeStorage(STORAGE_KEYS.reports, next);
+      return next;
+    });
     showToast(`Report "${newRep.name}" generated and ready for download!`);
 
     try {
-      await api.generateReport(reportFilename, category);
+      const created = await api.generateReport(reportFilename, category);
+      if (created?.id) {
+        setReports(prev => {
+          const updated = prev.map(r => (r.id === tempId ? { ...r, id: created.id, size: created.file_size || r.size } : r));
+          writeStorage(STORAGE_KEYS.reports, updated);
+          return updated;
+        });
+      }
     } catch (e) {
       // Local state already updated
     }
@@ -517,7 +584,15 @@ export function AppProvider({ children }) {
 
   const deleteReport = async (reportId) => {
     const reportToDelete = reports.find(r => r.id === reportId);
-    setReports(prev => prev.filter(r => r.id !== reportId));
+    const deletedIds = new Set(readStorage(STORAGE_KEYS.deletedReportIds, []));
+    deletedIds.add(reportId);
+    writeStorage(STORAGE_KEYS.deletedReportIds, Array.from(deletedIds));
+
+    setReports(prev => {
+      const next = prev.filter(r => r.id !== reportId);
+      writeStorage(STORAGE_KEYS.reports, next);
+      return next;
+    });
     showToast(`Report "${reportToDelete?.name || 'File'}" deleted.`, 'info');
 
     try {

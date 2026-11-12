@@ -21,8 +21,9 @@ class GenerateReportRequest(BaseModel):
 @router.get("", response_model=List[ReportResponse])
 def list_reports(db: Session = Depends(get_db)):
     reports = db.query(Report).order_by(Report.generated_at.desc()).all()
-    if not reports:
-        # Generate initial demo reports
+    seed_marker = os.path.join(settings.REPORTS_DIR, ".initial_report_seeded")
+    if not reports and not os.path.exists(seed_marker):
+        # Generate initial demo report once on first boot
         sample_path = os.path.join(settings.REPORTS_DIR, "Q4_Regional_Sales_Performance_MIS.xlsx")
         df_sample = pd.DataFrame([
             {"Region": "North America", "Revenue": 327500, "Units": 545, "Margin_Pct": 68.2},
@@ -31,7 +32,7 @@ def list_reports(db: Session = Depends(get_db)):
             {"Region": "LATAM", "Revenue": 70000, "Units": 103, "Margin_Pct": 51.0}
         ])
         generate_excel_mis_report(df_sample, sample_path, "Q4 Regional Sales Performance MIS")
-        
+
         rep = Report(
             report_name="Q4_Regional_Sales_Performance_MIS.xlsx",
             category="Financial Analytics",
@@ -40,7 +41,10 @@ def list_reports(db: Session = Depends(get_db)):
         )
         db.add(rep)
         db.commit()
-        reports = db.query(Report).all()
+        os.makedirs(settings.REPORTS_DIR, exist_ok=True)
+        with open(seed_marker, "w") as f:
+            f.write("seeded\n")
+        reports = db.query(Report).order_by(Report.generated_at.desc()).all()
     return reports
 
 @router.post("/generate", response_model=ReportResponse)
@@ -99,6 +103,13 @@ def delete_report(report_id: str, db: Session = Depends(get_db)):
             
     db.delete(rep)
     db.commit()
+
+    seed_marker = os.path.join(settings.REPORTS_DIR, ".initial_report_seeded")
+    if not os.path.exists(seed_marker):
+        os.makedirs(settings.REPORTS_DIR, exist_ok=True)
+        with open(seed_marker, "w") as f:
+            f.write("seeded\n")
+
     return {"message": "Report deleted successfully", "id": report_id}
 
 

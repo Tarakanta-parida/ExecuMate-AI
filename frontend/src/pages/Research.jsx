@@ -169,7 +169,7 @@ export default function Research() {
             <div className="flex items-center gap-2 truncate">
               <MessageSquare className="w-4 h-4 text-[#2563EB]" />
               <span className="text-xs font-bold text-[#1E293B] truncate">
-                Chat with: {selectedDocument.title}
+                {selectedDocument ? `Chat with: ${selectedDocument.title}` : 'No PDF Selected'}
               </span>
             </div>
             <span className="text-[10px] text-[#64748B] shrink-0">PyMuPDF + RAG Grounded</span>
@@ -268,49 +268,59 @@ export default function Research() {
           </div>
 
           <div className="p-4 overflow-y-auto flex-1 space-y-4">
-            {/* Document metadata card */}
-            <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-xs space-y-1.5">
-              <div className="font-bold text-[#1E293B]">{selectedDocument.title}</div>
-              <div className="text-[11px] text-[#64748B]">
-                Uploaded by <strong className="text-[#1E293B]">{selectedDocument.uploadedBy}</strong> on {selectedDocument.uploadedAt}
+            {!selectedDocument ? (
+              <div className="h-full flex flex-col items-center justify-center text-center p-6 text-[#64748B]">
+                <FileText className="w-8 h-8 mb-2 text-slate-300" />
+                <p className="text-xs font-medium text-[#1E293B]">No PDF selected</p>
+                <p className="text-[11px] mt-1">Upload a PDF document to view its executive summary and insights.</p>
               </div>
-            </div>
-
-            {/* Executive Summary */}
-            <div className="space-y-1.5">
-              <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider flex items-center gap-1.5">
-                <FileText className="w-3.5 h-3.5 text-[#2563EB]" /> Executive Summary
-              </h3>
-              <p className="text-xs text-[#334155] leading-relaxed bg-blue-50/50 p-3 rounded-lg border border-blue-100">
-                {selectedDocument.summary}
-              </p>
-            </div>
-
-            {/* Key Takeaways */}
-            <div className="space-y-1.5">
-              <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">Key Findings</h3>
-              <ul className="space-y-2">
-                {selectedDocument.keyPoints?.map((pt, idx) => (
-                  <li key={idx} className="flex items-start gap-2 text-xs text-[#334155]">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] shrink-0 mt-1.5" />
-                    <span>{pt}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {/* Recommendations */}
-            <div className="space-y-1.5">
-              <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">Actionable Recommendations</h3>
-              <div className="space-y-1.5">
-                {selectedDocument.recommendations?.map((rec, idx) => (
-                  <div key={idx} className="p-2.5 rounded-lg border border-amber-200 bg-amber-50/40 text-xs text-amber-900 flex items-start gap-2">
-                    <span className="font-bold text-amber-700">#{idx + 1}</span>
-                    <span>{rec}</span>
+            ) : (
+              <>
+                {/* Document metadata card */}
+                <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] text-xs space-y-1.5">
+                  <div className="font-bold text-[#1E293B]">{selectedDocument.title}</div>
+                  <div className="text-[11px] text-[#64748B]">
+                    Uploaded by <strong className="text-[#1E293B]">{selectedDocument.uploadedBy}</strong> on {selectedDocument.uploadedAt}
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
+
+                {/* Executive Summary */}
+                <div className="space-y-1.5">
+                  <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 text-[#2563EB]" /> Executive Summary
+                  </h3>
+                  <p className="text-xs text-[#334155] leading-relaxed bg-blue-50/50 p-3 rounded-lg border border-blue-100">
+                    {selectedDocument.summary}
+                  </p>
+                </div>
+
+                {/* Key Takeaways */}
+                <div className="space-y-1.5">
+                  <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">Key Findings</h3>
+                  <ul className="space-y-2">
+                    {selectedDocument.keyPoints?.map((pt, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-xs text-[#334155]">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#2563EB] shrink-0 mt-1.5" />
+                        <span>{pt}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* Recommendations */}
+                <div className="space-y-1.5">
+                  <h3 className="text-xs font-bold text-[#1E293B] uppercase tracking-wider">Actionable Recommendations</h3>
+                  <div className="space-y-1.5">
+                    {selectedDocument.recommendations?.map((rec, idx) => (
+                      <div key={idx} className="p-2.5 rounded-lg border border-amber-200 bg-amber-50/40 text-xs text-amber-900 flex items-start gap-2">
+                        <span className="font-bold text-amber-700">#{idx + 1}</span>
+                        <span>{rec}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
