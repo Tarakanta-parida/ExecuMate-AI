@@ -102,13 +102,13 @@ export default function Reports() {
             return (
               <div
                 key={report.id}
-                className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm hover:shadow transition-all flex flex-col justify-between"
+                className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-sm hover:shadow transition-all flex flex-col justify-between min-w-0"
               >
-                <div>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2.5">
+                <div className="min-w-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
                       <div
-                        className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs ${
+                        className={`w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs shrink-0 ${
                           report.format === 'Excel'
                             ? 'bg-emerald-50 text-[#16A34A]'
                             : 'bg-red-50 text-red-600'
@@ -120,17 +120,17 @@ export default function Reports() {
                           <FileText className="w-5 h-5" />
                         )}
                       </div>
-                      <div>
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#64748B]">
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-[10px] font-bold uppercase tracking-wider text-[#64748B] truncate">
                           {report.category}
                         </span>
-                        <h3 className="text-xs font-bold text-[#1E293B] line-clamp-1" title={report.name}>
+                        <h3 className="text-xs font-bold text-[#1E293B] truncate" title={report.name}>
                           {report.name}
                         </h3>
                       </div>
                     </div>
 
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-[#F1F5F9] text-[#475569]">
+                    <span className="shrink-0 px-2 py-0.5 rounded text-[10px] font-bold bg-[#F1F5F9] text-[#475569]">
                       {report.format}
                     </span>
                   </div>
