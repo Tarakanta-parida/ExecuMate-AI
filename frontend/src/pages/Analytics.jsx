@@ -80,6 +80,7 @@ export default function Analytics() {
   const [slicerColumn, setSlicerColumn] = useState('');
   const [slicerValue, setSlicerValue] = useState('All');
   const [chartMetric, setChartMetric] = useState('');
+  const [hoveredPieIndex, setHoveredPieIndex] = useState(null);
 
   const isStandardSchema = useMemo(() => {
     if (!dataset || dataset.length === 0) return true;
@@ -216,6 +217,62 @@ export default function Analytics() {
   }, [slicedDataset, isStandardSchema, customProfile]);
 
   const COLORS = ['#2563EB', '#16A34A', '#D97706', '#9333EA', '#0EA5E9', '#EC4899'];
+
+  const pieTotal = useMemo(
+    () => categoryChartData.reduce((acc, item) => acc + (Number(item.value) || 0), 0),
+    [categoryChartData]
+  );
+
+  const activePieItem =
+    hoveredPieIndex !== null && categoryChartData[hoveredPieIndex]
+      ? categoryChartData[hoveredPieIndex]
+      : null;
+
+  const renderPieTooltip = ({ active, payload }) => {
+    if (!active || !payload || !payload.length) return null;
+    const item = payload[0];
+    const sliceName = item.name ?? item.payload?.name ?? 'Segment';
+    const rawVal = Number(item.value) || 0;
+    const pct = pieTotal > 0 ? ((rawVal / pieTotal) * 100).toFixed(1) : '0.0';
+    const metricTitle = isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Value').replace(/_/g, ' ');
+    return (
+      <div className="bg-white border border-[#E2E8F0] rounded-lg px-3 py-2 shadow-md text-xs z-50">
+        <div className="font-bold text-[#1E293B] flex items-center gap-1.5">
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ backgroundColor: item.payload?.fill || COLORS[0] }}
+          />
+          <span>{sliceName}</span>
+        </div>
+        <div className="text-[#475569] mt-1 font-medium">
+          {metricTitle}:{' '}
+          <strong className="text-[#1E293B]">
+            {isStandardSchema ? `$${rawVal.toLocaleString()}` : rawVal.toLocaleString()}
+          </strong>{' '}
+          <span className="text-[#64748B]">({pct}%)</span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderCartesianTooltip = (valueFormatter) => ({ active, payload, label }) => {
+    if (!active || !payload || !payload.length) return null;
+    const sectionName = label || payload[0]?.payload?.region || payload[0]?.payload?.label || 'Segment';
+    return (
+      <div className="bg-white border border-[#E2E8F0] rounded-lg px-3 py-2 shadow-md text-xs z-50 space-y-1">
+        <div className="font-bold text-[#1E293B] border-b border-[#F1F5F9] pb-1">{sectionName}</div>
+        {payload.map((entry, idx) => (
+          <div key={idx} className="flex items-center justify-between gap-3 text-[#475569]">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor: entry.color || '#2563EB' }} />
+              <span>{entry.name}:</span>
+            </span>
+            <strong className="text-[#1E293B]">{valueFormatter(entry.value, entry.name)}</strong>
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   const availableRegions = useMemo(() => {
     const regs = new Set();
@@ -617,13 +674,16 @@ export default function Analytics() {
                   }
                 />
                 <Tooltip
-                  formatter={(v) => [
-                    isStandardSchema ? `$${v.toLocaleString()}` : v.toLocaleString(),
-                    isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Count')
-                  ]}
-                  contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
+                  content={renderCartesianTooltip((v) =>
+                    isStandardSchema ? `$${Number(v).toLocaleString()}` : Number(v).toLocaleString()
+                  )}
                 />
-                <Bar dataKey="revenue" fill="#2563EB" radius={[4, 4, 0, 0]} />
+                <Bar
+                  dataKey="revenue"
+                  name={isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Count').replace(/_/g, ' ')}
+                  fill="#2563EB"
+                  radius={[4, 4, 0, 0]}
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -641,7 +701,7 @@ export default function Analytics() {
             <p className="text-xs text-[#64748B] mb-2">
               {isStandardSchema ? 'Mix of Cloud SaaS vs Hardware vs Services' : 'Top segment breakdown'}
             </p>
-            <div className="h-48 w-full flex items-center justify-center">
+            <div className="h-48 w-full relative flex items-center justify-center">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -650,39 +710,57 @@ export default function Analytics() {
                     nameKey="name"
                     cx="50%"
                     cy="50%"
-                    innerRadius={45}
-                    outerRadius={70}
+                    innerRadius={48}
+                    outerRadius={74}
                     paddingAngle={3}
+                    onMouseEnter={(_, idx) => setHoveredPieIndex(idx)}
+                    onMouseLeave={() => setHoveredPieIndex(null)}
                   >
                     {categoryChartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={COLORS[index % COLORS.length]}
+                        opacity={hoveredPieIndex === null || hoveredPieIndex === index ? 1 : 0.45}
+                        style={{ cursor: 'pointer', transition: 'opacity 150ms ease' }}
+                      />
                     ))}
                   </Pie>
-                  <Tooltip
-                    formatter={(v) => [
-                      isStandardSchema ? `$${v.toLocaleString()}` : v.toLocaleString(),
-                      isStandardSchema ? 'Revenue' : (customProfile?.metricCol || 'Count')
-                    ]}
-                    contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
-                  />
+                  <Tooltip content={renderPieTooltip} />
                 </PieChart>
               </ResponsiveContainer>
+
+              {/* Center label displaying active pointed slice name & exact number */}
+              <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center px-6">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-[#64748B] truncate max-w-[82px]">
+                  {activePieItem ? activePieItem.name : 'Total'}
+                </span>
+                <span className="text-xs font-bold text-[#1E293B] truncate max-w-[88px]">
+                  {isStandardSchema
+                    ? `$${Math.round(activePieItem ? activePieItem.value : pieTotal).toLocaleString()}`
+                    : (activePieItem ? activePieItem.value : pieTotal).toLocaleString()}
+                </span>
+              </div>
             </div>
           </div>
 
           <div className="space-y-1.5 pt-2 border-t border-[#F1F5F9]">
             {categoryChartData.map((cat, idx) => (
-              <div key={idx} className="flex items-center justify-between text-xs">
+              <div
+                key={idx}
+                onMouseEnter={() => setHoveredPieIndex(idx)}
+                onMouseLeave={() => setHoveredPieIndex(null)}
+                className={`flex items-center justify-between text-xs px-1.5 py-0.5 rounded cursor-pointer transition-colors ${
+                  hoveredPieIndex === idx ? 'bg-blue-50/80' : ''
+                }`}
+              >
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: COLORS[idx % COLORS.length] }} />
                   <span className="text-[#1E293B] font-medium truncate">{cat.name}</span>
                 </div>
                 <span className="font-semibold text-[#64748B] shrink-0">
                   {isStandardSchema
-                    ? `$${(cat.value / 1000).toFixed(1)}k`
-                    : cat.value >= 1000
-                      ? `${(cat.value / 1000).toFixed(1)}k`
-                      : cat.value.toLocaleString()}
+                    ? `$${cat.value.toLocaleString()}`
+                    : cat.value.toLocaleString()}
                 </span>
               </div>
             ))}
@@ -730,11 +808,9 @@ export default function Analytics() {
                   }}
                 />
                 <Tooltip
-                  formatter={(v, name) => [
-                    `${businessImpactCharts.trend.isCurrency ? '$' : ''}${Number(v).toLocaleString()}`,
-                    name
-                  ]}
-                  contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
+                  content={renderCartesianTooltip((v) =>
+                    `${businessImpactCharts.trend.isCurrency ? '$' : ''}${Number(v).toLocaleString()}`
+                  )}
                 />
                 <Legend wrapperStyle={{ fontSize: '11px' }} />
                 <Area
@@ -799,13 +875,11 @@ export default function Analytics() {
                   tickFormatter={(v) => `${v}${businessImpactCharts.impact.lineSuffix}`}
                 />
                 <Tooltip
-                  formatter={(v, name) => {
-                    if (name === businessImpactCharts.impact.lineLabel) {
-                      return [`${Number(v).toLocaleString()}${businessImpactCharts.impact.lineSuffix}`, name];
-                    }
-                    return [`${businessImpactCharts.impact.barIsCurrency ? '$' : ''}${Number(v).toLocaleString()}`, name];
-                  }}
-                  contentStyle={{ backgroundColor: '#FFFFFF', borderColor: '#E2E8F0', borderRadius: '8px', fontSize: '12px' }}
+                  content={renderCartesianTooltip((v, name) =>
+                    name === businessImpactCharts.impact.lineLabel
+                      ? `${Number(v).toLocaleString()}${businessImpactCharts.impact.lineSuffix}`
+                      : `${businessImpactCharts.impact.barIsCurrency ? '$' : ''}${Number(v).toLocaleString()}`
+                  )}
                 />
                 <Legend wrapperStyle={{ fontSize: '11px' }} />
                 <Bar
